@@ -41,18 +41,25 @@ const PLACEHOLDER = '__PYKEKO_MVS_JSON_PLACEHOLDER__';
 
 /** Build a clip-props object for the volume rep's `type.params.clip` slot.
  *  variant: 'pixel' → per-fragment clip (vs 'instance' = per-vertex; pixel is
- *  visually smoother for spheres). One sphere object centered at `target` with
- *  uniform scale. The rotation/transform fields aren't used by spheres but the
- *  schema requires them. */
+ *  visually smoother for spheres). One sphere object centered at `target`.
+ *  invert: true is critical — by default Mol*'s clipTest discards pixels
+ *  INSIDE the shape (cutaway behaviour); invert flips it so we keep pixels
+ *  INSIDE the sphere and discard everything outside. Without this, density
+ *  renders the WHOLE embedded cube minus a 20 Å hole around the camera — the
+ *  opposite of what we want. (See mol-gl/shader/chunks/common-clip.glsl
+ *  clipTest for the semantics.)
+ *  Note: Mol*'s sphere SDF uses scale * 0.5 internally, so we pass the
+ *  diameter (2*radius) to get the intended sphere radius in world units. */
 function makeClipSphere(target: Vec3, radius: number) {
+    const diameter = radius * 2;
     return {
         variant: 'pixel' as const,
         objects: [{
             type: 'sphere' as const,
-            invert: false,
+            invert: true,
             position: Vec3.create(target[0], target[1], target[2]),
             rotation: { axis: Vec3.create(1, 0, 0), angle: 0 },
-            scale: Vec3.create(radius, radius, radius),
+            scale: Vec3.create(diameter, diameter, diameter),
             transform: Mat4.identity(),
         }],
     };
