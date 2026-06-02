@@ -2,20 +2,18 @@
 // __PYKEKO_MVS_JSON_PLACEHOLDER__ inside index.html with an MVS JSON document at
 // export time. On load we parse it and hand it to Mol*'s loadMVS.
 //
-// History note: a "density follows camera" widget was attempted here
-// (commit 2026-06-01) but rolled back. Mol* 4.18's MVS-loaded volume reps
-// expose only ['type', 'colorTheme', 'sizeTheme'] as state-tree params —
-// the geometric `clip` param available on standalone VolumeRepresentation3D
-// isn't there, and Representation.State.clipping is per-atom-loci (no
-// meaning for volumes). Cannot dynamically clip the volume isosurface
-// through the supported API surface. The exporters' static crop centred on
-// the camera target at export time covers most of the same value at no
-// runtime cost; future revival paths are (a) Mol* upstream adding clip to
-// the volume-rep transformer, or (b) implementing volume-data masking that
-// rewrites grid values outside the sphere and forces a re-mesh on camera
-// change (~50-200ms per move, viable but laggy on big maps).
+// Camera-follow density: MVS itself can't carry a clip param on
+// volume_representation (see molstar/molstar#1844). What it CAN do is leave
+// the volume reps in the state tree where we can reach them post-load.
+// Mol*'s underlying VolumeRepresentation3D has a `clip` param (a renderable
+// GPU uniform — updating it is essentially free, no re-mesh) inside its
+// `type.params`. After loadMVS we walk the state tree, find every volume
+// rep cell, and add a sphere clip that follows the camera target. Updating
+// the clip on camera change is one state-tree update per volume per frame,
+// throttled so we only fire when the user pauses.
 
 import { useEffect, useRef, useState } from 'react';
+import { throttleTime } from 'rxjs';
 import { createPluginUI } from 'molstar/lib/mol-plugin-ui';
 import { renderReact18 } from 'molstar/lib/mol-plugin-ui/react18';
 import { DefaultPluginUISpec } from 'molstar/lib/mol-plugin-ui/spec';
@@ -26,9 +24,80 @@ import { MVSData } from 'molstar/lib/extensions/mvs/mvs-data';
 import { MolViewSpec } from 'molstar/lib/extensions/mvs/behavior';
 import { StateActions } from 'molstar/lib/mol-plugin-state/actions';
 import { PluginCommands } from 'molstar/lib/mol-plugin/commands';
+import { StateTransforms } from 'molstar/lib/mol-plugin-state/transforms';
+import { Mat4, Vec3 } from 'molstar/lib/mol-math/linear-algebra';
 import 'molstar/build/viewer/molstar.css';
 
+// Half-side of the sphere that clips volume isosurfaces around the camera
+// target. PyKeko/Coot default is ~13 Å; 20 Å feels a bit roomier and
+// matches the export-time embedded cube radius so the user has visible
+// density up to the embedded region's boundary.
+const DENSITY_CLIP_RADIUS = 20;
+// Throttle camera updates — fire the leading edge so a single drag updates
+// once, but don't burn frames if the user keeps moving.
+const CAMERA_THROTTLE_MS = 80;
+
 const PLACEHOLDER = '__PYKEKO_MVS_JSON_PLACEHOLDER__';
+
+/** Build a clip-props object for the volume rep's `type.params.clip` slot.
+ *  variant: 'pixel' → per-fragment clip (vs 'instance' = per-vertex; pixel is
+ *  visually smoother for spheres). One sphere object centered at `target` with
+ *  uniform scale. The rotation/transform fields aren't used by spheres but the
+ *  schema requires them. */
+function makeClipSphere(target: Vec3, radius: number) {
+    return {
+        variant: 'pixel' as const,
+        objects: [{
+            type: 'sphere' as const,
+            invert: false,
+            position: Vec3.create(target[0], target[1], target[2]),
+            rotation: { axis: Vec3.create(1, 0, 0), angle: 0 },
+            scale: Vec3.create(radius, radius, radius),
+            transform: Mat4.identity(),
+        }],
+    };
+}
+
+/** After loadMVS: walk the state tree, find every volume representation
+ *  cell, set an initial sphere clip on it, and subscribe to camera moves
+ *  so the clip follows. Returns the rxjs subscription so the caller can
+ *  unsubscribe on dispose. Returns null if the scene has no volume reps. */
+function wireCameraFollowDensity(plugin: PluginUIContext) {
+    const cells = plugin.state.data.selectQ(q => q.ofTransformer(StateTransforms.Representation.VolumeRepresentation3D));
+    if (!cells || cells.length === 0) return null;
+    const volumeRefs = cells.map(c => c.transform.ref);
+
+    const applyClipAt = async (target: Vec3) => {
+        const clip = makeClipSphere(target, DENSITY_CLIP_RADIUS);
+        const update = plugin.build();
+        for (const ref of volumeRefs) {
+            update.to(ref).update((old: any) => {
+                // type.params is a nested object: {isoValue, clip, alpha, ...}.
+                // Only patch clip; preserve everything else (isoValue is what
+                // the MVS contour-slider in the right panel reads/writes).
+                if (!old?.type?.params) return old;
+                return {
+                    ...old,
+                    type: { ...old.type, params: { ...old.type.params, clip } },
+                };
+            });
+        }
+        await update.commit();
+    };
+
+    // Seed: clip wherever the camera target is right now.
+    const cam = plugin.canvas3d?.camera.state;
+    if (cam) void applyClipAt(cam.target as unknown as Vec3);
+
+    // And re-clip on every camera settle. throttleTime(leading=true) fires
+    // immediately on the first move of a burst and again at most every N ms
+    // until the burst stops.
+    return plugin.canvas3d!.camera.stateChanged
+        .pipe(throttleTime(CAMERA_THROTTLE_MS, undefined, { leading: true, trailing: true }))
+        .subscribe(state => {
+            void applyClipAt(state.target as unknown as Vec3);
+        });
+}
 
 export function App() {
     const hostRef = useRef<HTMLDivElement>(null);
@@ -101,6 +170,12 @@ export function App() {
             plugin = await createPluginUI({ target: hostRef.current!, spec, render: renderReact18 });
             if (cancelled) { plugin.dispose(); return; }
             pluginRef.current = plugin;
+            // Expose the plugin for power users / debugging — they can script
+            // Mol* in the console (e.g. tweak the clip radius:
+            //   const p = window.__molstar;
+            //   p.state.data.cells.forEach(c => { ... }).
+            // Mol*'s own demo viewer does the same; harmless.
+            (window as any).__molstar = plugin;
             // Keep our local rightOpen state in sync if anything else mutates the layout.
             const sub = plugin.layout.events.updated.subscribe(() => {
                 setRightOpen(plugin!.layout.state.regionState.right !== 'hidden');
@@ -119,6 +194,9 @@ export function App() {
                 const mvs = MVSData.fromMVSJ(text);
                 await loadMVS(plugin, mvs, { sanityChecks: true });
                 setStatus('');
+                // Wire camera-follow density (no-op if the scene has no maps).
+                const followSub = wireCameraFollowDensity(plugin);
+                if (followSub) (plugin as any).__pykekoFollowSub = followSub;
             } catch (e: any) {
                 console.error(e);
                 setStatus(`Error loading MVS: ${e?.message ?? String(e)}`);
@@ -131,6 +209,7 @@ export function App() {
         return () => {
             cancelled = true;
             (plugin as any)?.__pykekoLayoutSub?.unsubscribe?.();
+            (plugin as any)?.__pykekoFollowSub?.unsubscribe?.();
             plugin?.dispose();
             pluginRef.current = null;
         };
