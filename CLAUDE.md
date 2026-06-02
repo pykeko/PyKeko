@@ -49,13 +49,14 @@ These flow between PyKeko (wrapper), PyKekoMCP, and the in-page bridge inside Mo
 
 If you need to "rebrand" further, change titles, READMEs, app names, package names — never the above.
 
-## Current state (as of pk-v0.2, 2026-05-28)
+## Current state (as of pk-v0.2.3, 2026-06-02)
 
-- Version: `0.2.0` in `package.json`, `CFBundleShortVersionString` derived from it
-- Release: [pk-v0.2](https://github.com/pykeko/Moorhen-PyKeko/releases/tag/pk-v0.2) on Moorhen-PyKeko, asset: `PyKeko.dmg` (~197 MB). From 0.2.0 the wrapper carries a matching `pk-v0.2` tag too.
-  - 0.2.0 adds: CLI launch+load (`.cif`→dictionary attach, `pykeko 7sj3`, `.pml`), single-instance file handoff + `--new`, `remote/pykeko_remote.py` (PyMOL-`-R`-style client), Preferences → "Install command-line launcher" + first-run hint, residue **Edit torsions** panel (local φ/ψ + χ + live Ramachandran), black bg / hydrogens-by-default / PyMOL-default scripting.
+- Version: `0.2.3` in `package.json`, `CFBundleShortVersionString` derived from it
+- Release: [pk-v0.2.3](https://github.com/pykeko/Moorhen-PyKeko/releases/tag/pk-v0.2.3) on Moorhen-PyKeko, asset: `PyKeko.dmg`. The wrapper carries a matching `pk-v0.2.3` tag.
+  - 0.2.3 adds: **MVS portable-viewer export overhaul** — File → Export portable viewer (.html) now honors the actual visible Moorhen representations (CBs/CRs/MolecularSurface/VdwSpheres/glycoBlocks/ligands/etc., mapped to MVS rep types), uses the molecule's real Coot colour rules instead of a fixed palette, preserves CPK heteroatom colours (N=blue, O=red, S=yellow, …) when a rule has `applyColourToNonCarbonAtoms=false`, parses CID-style selectors (`/mdl/chain`, residue ranges) into MVS selectors. The viewer template also gets a face-lift: left panel starts collapsed (icon column only), "Remote States" snapshot list removed, left-panel actions filtered to just Open Files, and a new floating chevron button (top-right of canvas) toggles the right Structure Tools panel.
+- [pk-v0.2](https://github.com/pykeko/Moorhen-PyKeko/releases/tag/pk-v0.2) (2026-05-28): added CLI launch+load (`.cif`→dictionary attach, `pykeko 7sj3`, `.pml`), single-instance file handoff + `--new`, `remote/pykeko_remote.py` (PyMOL-`-R`-style client), Preferences → "Install command-line launcher" + first-run hint, residue **Edit torsions** panel (local φ/ψ + χ + live Ramachandran), black bg / hydrogens-by-default / PyMOL-default scripting.
+- [pk-v0.1](https://github.com/pykeko/Moorhen-PyKeko/releases/tag/pk-v0.1) (2026-05-25): first rebranded release.
 - Build/release: `PATH=/opt/homebrew/bin:$PATH npm run make` (Homebrew node 26; the vite dist build is a few minutes). Smoke-test the built app by installing over `/Applications/PyKeko.app` and launching with `--new` — and **don't leave PyKekoDev running**, two coot pthread instances contend at worker-init and the second hangs on "Moorhen is loading…" (not a bug; see project memory).
-- [pk-v0.1](https://github.com/pykeko/Moorhen-PyKeko/releases/tag/pk-v0.1): the prior release (`PyKeko.dmg`, 185 MB)
 - Icons: `PyKeko.icns` (multi-resolution, used by electron-forge), `PyKeko_icon.png` (rounded-square with dark-corner mask, source for the `.icns` — intended for OS app-icon clip), `PyKeko_avatar.png` (flat-square 5%-crop of the icon — used for the GH org avatar, repo social previews, and README `<img>` embeds), `PyKeko_logo.png` (transparent, for UI embedding)
 
 ## Pending follow-ups

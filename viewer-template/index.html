@@ -10,6 +10,9 @@
     <div id="root"></div>
     <!-- PyKeko replaces the placeholder below with the exported MolViewSpec JSON. -->
     <script id="__pykeko_mvs__" type="application/json">__PYKEKO_MVS_JSON_PLACEHOLDER__</script>
+    <!-- PyMOL FOV (degrees) carried through so Mol* matches PyMOL's perspective.
+         Replaced at export time; falls back to Mol*'s 45° default if left unreplaced. -->
+    <script>window.__PYKEKO_FOV__ = __PYKEKO_FOV_PLACEHOLDER__;</script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

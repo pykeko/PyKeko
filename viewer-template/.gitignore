@@ -1,2 +1,7 @@
 node_modules/
 *.log
+# PDB/CIF test fetches that landed in this dir during exporter QA — they're
+# downloaded on demand, not part of the template.
+*.cif
+*.pdb
+*.mtz
