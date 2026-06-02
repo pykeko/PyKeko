@@ -49,11 +49,12 @@ These flow between PyKeko (wrapper), PyKekoMCP, and the in-page bridge inside Mo
 
 If you need to "rebrand" further, change titles, READMEs, app names, package names — never the above.
 
-## Current state (as of pk-v0.2.4, 2026-06-02)
+## Current state (as of pk-v0.2.5, 2026-06-02)
 
-- Version: `0.2.4` in `package.json`, `CFBundleShortVersionString` derived from it
-- Release: [pk-v0.2.4](https://github.com/pykeko/Moorhen-PyKeko/releases/tag/pk-v0.2.4) on Moorhen-PyKeko, asset: `PyKeko.dmg`. The wrapper carries a matching `pk-v0.2.4` tag.
-  - 0.2.4 adds:
+- Version: `0.2.5` in `package.json`, `CFBundleShortVersionString` derived from it
+- Release: [pk-v0.2.5](https://github.com/pykeko/Moorhen-PyKeko/releases/tag/pk-v0.2.5) on Moorhen-PyKeko, asset: `PyKeko.dmg`. The wrapper carries a matching `pk-v0.2.5` tag.
+  - 0.2.5 adds: **Shell-style history in Interactive Scripting** — the Calculate → Interactive scripting (.../PyMOL/JavaScript) modal now keeps per-mode history. ↑ at the top of the textarea recalls the previous command; ↓ at the bottom restores forward (or the in-progress draft you had typed before diving into history). Cursor-position-aware so ↑/↓ still move the caret line-by-line inside multi-line scripts. Cmd/Ctrl+Enter submits without reaching for the Play button. History persists across reloads via localStorage (~200 entries per mode, dedupes consecutive duplicates).
+- [pk-v0.2.4](https://github.com/pykeko/Moorhen-PyKeko/releases/tag/pk-v0.2.4) (2026-06-02):
     - **Camera-follow density** in the portable viewer — embedded volume isosurfaces now get a sphere clip that follows the camera target (~20 Å radius, throttled to 80 ms), so density tracks the user's view like Coot's "rolling cube". Implemented via Mol\*'s `clip` renderable on `VolumeRepresentation3D` (GPU uniform, no re-mesh on update). Embedded cube bumped from 20 Å → 40 Å half-side to give wander room before the user pans past the loaded data; file size grows ~8× per map (~250 KB → ~2 MB) for the larger embedded region.
     - **Export confirmation dialog** — when the scene has visible maps, the File → Export portable viewer (.html) menu now pops a confirm with an "Include density map(s)" checkbox and file-size estimate. Default keeps maps; unchecking ships a much smaller structures-only HTML (typically ~10× shrink).
     - **PML bundle export stubbed** — File → Save as PyMOL bundle (.pml) was a "complete disaster" per user; menu item hidden but `MoorhenPymolSaveBundle.ts` and the `pykeko:save-bundle` IPC handler stay in tree for revival.
