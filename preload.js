@@ -14,6 +14,11 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("MOORHEN_FORCE_32BIT", true);
 
+// PyKeko wrapper version (read from package.json at preload time). Renderer
+// reads this via window.__pykekoVersion to e.g. show the right number in the
+// first-run welcome modal instead of a hardcoded stale string.
+contextBridge.exposeInMainWorld("__pykekoVersion", require("./package.json").version);
+
 contextBridge.exposeInMainWorld("__moorhenControl", {
   onInvoke: (cb) => {
     const handler = (_e, msg) => cb(msg);

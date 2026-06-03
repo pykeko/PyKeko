@@ -125,13 +125,30 @@ function startStaticServer(distDir) {
         });
       });
     });
-    server.on("error", reject);
-    // Port 0 → OS picks free port
-    server.listen(0, "127.0.0.1", () => {
+    // Pin a deterministic high port so the renderer's origin stays the
+    // SAME across launches. The browser's localStorage is per-origin
+    // (scheme+host+PORT), so port-0 ("any free port") wipes the welcome
+    // modal seen-flag, scripting history, and any other in-page persisted
+    // state on every restart. Fallback to OS-assigned only if the pin is
+    // busy (e.g. another PyKeko instance or some squatter); persistence is
+    // lost for that session but the app at least starts.
+    const STATIC_PORT_PREFERRED = 51823;
+    let triedFallback = false;
+    const onListen = () => {
       const port = server.address().port;
       log("static server on 127.0.0.1:" + port + " serving " + distDir);
       resolve({ server, port });
+    };
+    server.on("error", err => {
+      if (err && err.code === "EADDRINUSE" && !triedFallback) {
+        triedFallback = true;
+        log("static server: pinned port " + STATIC_PORT_PREFERRED + " busy, falling back to OS-assigned (localStorage won't persist this session)");
+        server.listen(0, "127.0.0.1", onListen);
+      } else {
+        reject(err);
+      }
     });
+    server.listen(STATIC_PORT_PREFERRED, "127.0.0.1", onListen);
   });
 }
 
