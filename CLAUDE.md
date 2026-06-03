@@ -90,3 +90,4 @@ If you need to "rebrand" further, change titles, READMEs, app names, package nam
 - `forge.config.js` — variant definitions, packagerConfig.icon, makers
 - `main.js` — Electron lifecycle, vite spawn (dev) or static server (dist), control server
 - `preload.js` — forces 32-bit WASM, exposes `__moorhenControl` to in-page
+- `RELEASE-HISTORY.md` — one-row-per-release log: date, dmg size, size deltas, headline feature. Append a new row after every release. Use `tools/release-sizes.sh` (or `tools/release-sizes.sh v0.2.10` for a single version) to pull current sizes from the GitHub API and emit a ready-to-paste markdown row — you just fill in the headline.
