@@ -534,7 +534,61 @@ function startControlServer(win) {
   // resolves relative paths correctly without needing MOORHEN_CWD.
   const cliName = IS_DIST ? "pykeko" : "pykeko-dev";
   const cliTarget = "/usr/local/bin/" + cliName;
-  const launcherScript = '#!/bin/sh\n# ' + cliName + ' launcher (installed by ' + WINDOW_TITLE + ')\nexec "' + process.execPath + '" "$@"\n';
+  // Launcher script:
+  //  - Intercepts `--help` / `-h` HERE rather than passing them through to the
+  //    Electron binary, because Chromium's argv preprocessor eats `--help` and
+  //    prints its own (huge, irrelevant) Chromium help message before our
+  //    main.js ever sees it. Printing from the launcher is also instant —
+  //    no need to spin up the .app to ask "what flags exist?".
+  //  - Otherwise execs the .app's binary verbatim with the user's args.
+  //  - cwd is inherited from the shell, so relative paths resolve correctly
+  //    without needing MOORHEN_CWD.
+  const launcherScript = [
+    "#!/bin/sh",
+    "# " + cliName + " launcher (installed by " + WINDOW_TITLE + ")",
+    "case \"$1\" in",
+    "  -h|--help)",
+    "    cat <<'EOF'",
+    cliName + " — PyKeko command-line launcher",
+    "",
+    "Usage:",
+    "  " + cliName + " [files...] [PDB_IDs...] [script.pml] [--new]",
+    "  " + cliName + " -h | --help",
+    "",
+    "Loadable file extensions:",
+    "  .pdb .ent .cif .mmcif    coordinates (.cif beside coords attaches as a ligand dictionary)",
+    "  .mtz                     reflections (auto-displays as a 2Fo-Fc + Fo-Fc map pair)",
+    "  .map .mrc .ccp4          density",
+    "  .pb .pykeko              full Moorhen session (re-loads molecules/maps/view/etc.)",
+    "  .gz                      routed by inner extension",
+    "",
+    "PDB IDs:",
+    "  Anything matching ^[0-9][a-zA-Z0-9]{3}$ that isn't an existing file gets",
+    "  fetched from RCSB.  Example:  " + cliName + " 7sj3",
+    "",
+    "Scripts:",
+    "  .pml files run through PyKeko's PyMOL command translator AFTER any",
+    "  structures/maps from the same invocation are loaded.  Example:",
+    "    " + cliName + " model.pdb data.mtz refine.pml",
+    "",
+    "Flags:",
+    "  --new        Start a fresh instance instead of handing files to a running",
+    "               one (default is single-instance, PyMOL '-R' style).",
+    "  -h, --help   Print this message and exit.",
+    "",
+    "Examples:",
+    "  " + cliName + " model.pdb data.mtz ligand.cif      load coords + maps + dict",
+    "  " + cliName + " 7sj3                                fetch by PDB id",
+    "  " + cliName + " 7sj3 refine.pml                     fetch then run a script",
+    "  " + cliName + " --new                               open a fresh empty window",
+    "  " + cliName + " session.pykeko                      re-open a saved session",
+    "EOF",
+    "    exit 0",
+    "    ;;",
+    "esac",
+    "exec \"" + process.execPath + "\" \"$@\"",
+    "",
+  ].join("\n");
 
   ipcMain.handle("pykeko:cli-status", async () => {
     try {
@@ -603,6 +657,58 @@ function startControlServer(win) {
 // script sets MOORHEN_CWD so relative paths resolve against the shell's cwd
 // (Electron's process.cwd() is unreliable for a .app launch). `--new` forces a
 // fresh session instead of loading into a running instance.
+
+// -h / --help: print supported flags + load patterns and exit. Handled before
+// anything else so it works regardless of whether an instance is already
+// running. Skip when running inside the .app's GUI launcher (Electron passes a
+// long list of Chromium switches in process.argv that we don't want to misread
+// as a user typing `pykeko --help`); only treat -h/--help as a request when the
+// CLI launcher invoked us with it explicitly.
+if (process.argv.includes("-h") || process.argv.includes("--help")) {
+  // Read the wrapper version from package.json (where Node's require works fine,
+  // unlike Electron's preload).
+  let v = "";
+  try { v = require(path.join(__dirname, "package.json")).version || ""; } catch (e) {}
+  const cliName = process.argv[0]?.split("/").pop()?.includes("pykeko-dev") ? "pykeko-dev" : "pykeko";
+  // eslint-disable-next-line no-console
+  console.log(
+`${cliName} ${v ? "(v" + v + ")" : ""}
+
+Usage:
+  ${cliName} [files...] [PDB_IDs...] [script.pml] [--new]
+  ${cliName} -h | --help
+
+Loadable file extensions:
+  .pdb .ent .cif .mmcif        coordinates (.cif beside coords attaches as a ligand dictionary)
+  .mtz                         reflections (auto-displays as a 2Fo-Fc + Fo-Fc map pair)
+  .map .mrc .ccp4              density
+  .pb .pykeko                  full Moorhen session (re-loads molecules/maps/view/etc.)
+  .gz                          routed by inner extension
+
+PDB IDs:
+  Anything matching ^[0-9][a-zA-Z0-9]{3}$ that isn't an existing file gets
+  fetched from RCSB.  Example:  ${cliName} 7sj3
+
+Scripts:
+  .pml files run through PyKeko's PyMOL command translator AFTER any
+  structures/maps from the same invocation are loaded.  Example:
+    ${cliName} model.pdb data.mtz refine.pml
+
+Flags:
+  --new        Start a fresh instance instead of handing files to a running
+               one (default behaviour is single-instance, PyMOL '-R' style).
+  -h, --help   Print this message and exit.
+
+Examples:
+  ${cliName} model.pdb data.mtz ligand.cif      load coords + maps + dict
+  ${cliName} 7sj3                                fetch by PDB id
+  ${cliName} 7sj3 refine.pml                     fetch then run a script
+  ${cliName} --new                               open a fresh empty window
+  ${cliName} session.pykeko                      re-open a saved session
+`);
+  process.exit(0);
+}
+
 const WANT_NEW = process.argv.includes("--new");
 const LAUNCH_CWD = process.env.MOORHEN_CWD || process.cwd();
 const LOADABLE_RE = /\.(pdb|ent|cif|mmcif|mtz|mrc|map|ccp4|gz)$/i;
