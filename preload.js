@@ -47,4 +47,11 @@ contextBridge.exposeInMainWorld("__moorhenControl", {
   // directory under their original names. Used by PyMOL `save` (single .pdb/.cif
   // or a .pml bundle with sibling structure/map files).
   saveBundle: (suggestedName, files) => ipcRenderer.invoke("pykeko:save-bundle", { suggestedName, files }),
+  // Renderer -> main: Save full Moorhen session (.pykeko file) via native
+  // Save panel. `bytes` is a Uint8Array of the protobuf-encoded session.
+  // Returns { ok, path } | { canceled } | { ok: false, error }.
+  saveSession: (bytes, suggestedName) => ipcRenderer.invoke("pykeko:save-session", { bytes, suggestedName }),
+  // Renderer -> main: Open a .pykeko / .pb session file via native Open panel.
+  // Returns { ok, path, bytes: Uint8Array } | { canceled } | { ok: false, error }.
+  openSession: () => ipcRenderer.invoke("pykeko:open-session"),
 });

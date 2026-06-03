@@ -49,11 +49,12 @@ These flow between PyKeko (wrapper), PyKekoMCP, and the in-page bridge inside Mo
 
 If you need to "rebrand" further, change titles, READMEs, app names, package names — never the above.
 
-## Current state (as of pk-v0.2.7, 2026-06-02)
+## Current state (as of pk-v0.2.8, 2026-06-03)
 
-- Version: `0.2.7` in `package.json`, `CFBundleShortVersionString` derived from it
-- Release: [pk-v0.2.7](https://github.com/pykeko/Moorhen-PyKeko/releases/tag/pk-v0.2.7) on Moorhen-PyKeko, asset: `PyKeko.dmg`. The wrapper carries a matching `pk-v0.2.7` tag.
-  - 0.2.7 fixes two persistence/UI bugs caught during pre-install smoke check:
+- Version: `0.2.8` in `package.json`, `CFBundleShortVersionString` derived from it
+- Release: [pk-v0.2.8](https://github.com/pykeko/Moorhen-PyKeko/releases/tag/pk-v0.2.8) on Moorhen-PyKeko, asset: `PyKeko.dmg`. The wrapper carries a matching `pk-v0.2.8` tag.
+  - 0.2.8 adds: **Real desktop session save/restore** — `File → Save session…` opens a native macOS Save panel and writes a `.pykeko` file (protobuf-encoded full scene: molecules, maps, per-rep colour rules, camera, vectors, 2D overlays, view settings). `File → Open session…` does the inverse with a native Open panel. `.pykeko` files also drag-drop onto the canvas. Browser build keeps the old behaviour (browser-download + in-browser IndexedDB backups). The legacy "Save Session File:" textbox row + in-browser-backup items are hidden in the desktop build — they made sense when there was no filesystem access, redundant when there is. Session also captures a new optional `PyKekoUiState` block (scripting modal mode, welcome-hint seen flag) for future continuity work. Known limitation: hidden reps are still filtered out at save time (`fetchSession` does `.filter(item => item.visible)`); fixing requires the restore path to gracefully re-add hidden reps — deferred.
+- [pk-v0.2.7](https://github.com/pykeko/Moorhen-PyKeko/releases/tag/pk-v0.2.7) (2026-06-02): persistence/UI fixes:
     - **localStorage was wiped every launch** because `main.js`'s static server bound to port 0 (OS-assigned), giving the renderer a different origin (`http://127.0.0.1:<random>/`) on each start. Browser localStorage is per-origin, so the welcome-modal "seen" flag, the scripting history, and any other in-page persisted state evaporated on restart. Pinned to port 51823 (falls back to OS-assigned only if that's busy — persistence is lost just for that session). **Result**: welcome modal stays dismissed; scripting history actually persists.
     - **Welcome modal title showed stale "Welcome to PyKeko 0.2.0"** even on fresh installs of newer versions. The hint version (used for re-prompt logic) and the displayed version were the same hardcoded constant. Split them: preload now exposes `window.__pykekoVersion` from package.json; the modal reads the actual app version while keeping HINT_VERSION semantic ("which welcome content has been dismissed") so bug-fix releases don't re-prompt.
 - [pk-v0.2.6](https://github.com/pykeko/Moorhen-PyKeko/releases/tag/pk-v0.2.6) (2026-06-02): regression-fix release —

@@ -323,7 +323,7 @@ function startControlServer(win) {
         defaultPath: lastOpenDir,
         properties: ["openFile", "multiSelections"],
         filters: [
-          { name: "Molecular data", extensions: ["pdb", "ent", "cif", "mmcif", "mol", "mtz", "map", "mrc", "ccp4", "gz", "pb"] },
+          { name: "Molecular data", extensions: ["pdb", "ent", "cif", "mmcif", "mol", "mtz", "map", "mrc", "ccp4", "gz", "pb", "pykeko"] },
           { name: "All files", extensions: ["*"] },
         ],
       });
@@ -454,6 +454,58 @@ function startControlServer(win) {
       return { ok: true, path: r.filePath };
     } catch (e) {
       log("export-mvs-viewer failed: " + (e && e.message));
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  });
+
+  // Save full Moorhen session as a `.pykeko` file (protobuf-encoded). The
+  // renderer hands us the encoded bytes; we open a native Save panel and
+  // write them. Default extension `.pykeko` (PyKeko-branded); `.pb` accepted
+  // too for backward-compat with files saved by upstream Moorhen.
+  ipcMain.handle("pykeko:save-session", async (_evt, payload) => {
+    try {
+      const { bytes, suggestedName } = payload || {};
+      if (!bytes) return { ok: false, error: "no session bytes" };
+      const buf = Buffer.from(bytes);
+      const win = BrowserWindow.getFocusedWindow() || mainWindow;
+      const suggested = String(suggestedName || "pykeko_session.pykeko").replace(/[/\\]/g, "_");
+      const r = await dialog.showSaveDialog(win, {
+        title: "Save PyKeko session",
+        defaultPath: path.join(lastSaveDir || app.getPath("desktop"), suggested),
+        filters: [{ name: "PyKeko session", extensions: ["pykeko", "pb"] }],
+      });
+      if (r.canceled || !r.filePath) return { canceled: true };
+      lastSaveDir = path.dirname(r.filePath);
+      fs.writeFileSync(r.filePath, buf);
+      log("saved session: " + r.filePath + " (" + buf.length.toLocaleString() + " bytes)");
+      return { ok: true, path: r.filePath };
+    } catch (e) {
+      log("save-session failed: " + (e && e.message));
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  });
+
+  // Open a `.pykeko` / `.pb` session via native Open panel. Returns bytes
+  // back to the renderer for protobuf-decode + state hydration there.
+  ipcMain.handle("pykeko:open-session", async () => {
+    try {
+      const win = BrowserWindow.getFocusedWindow() || mainWindow;
+      const r = await dialog.showOpenDialog(win, {
+        title: "Open PyKeko session",
+        defaultPath: lastSaveDir || app.getPath("desktop"),
+        filters: [{ name: "PyKeko session", extensions: ["pykeko", "pb"] }],
+        properties: ["openFile"],
+      });
+      if (r.canceled || !r.filePaths.length) return { canceled: true };
+      const fp = r.filePaths[0];
+      lastSaveDir = path.dirname(fp);
+      const buf = fs.readFileSync(fp);
+      log("opened session: " + fp + " (" + buf.length.toLocaleString() + " bytes)");
+      // Electron serializes Buffer fine across IPC; the renderer can wrap as
+      // Uint8Array if needed for protobuf decoding.
+      return { ok: true, path: fp, bytes: buf };
+    } catch (e) {
+      log("open-session failed: " + (e && e.message));
       return { ok: false, error: String((e && e.message) || e) };
     }
   });

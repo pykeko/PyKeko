@@ -6,3 +6,6 @@ static/
 .DS_Store
 __pycache__/
 *.pyc
+
+# Stray test downloads (PDB CIFs fetched during development)
+*.cif
