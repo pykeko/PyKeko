@@ -14,10 +14,30 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("MOORHEN_FORCE_32BIT", true);
 
-// PyKeko wrapper version (read from package.json at preload time). Renderer
-// reads this via window.__pykekoVersion to e.g. show the right number in the
-// first-run welcome modal instead of a hardcoded stale string.
-contextBridge.exposeInMainWorld("__pykekoVersion", require("./package.json").version);
+// PyKeko wrapper version. Renderer reads this via window.__pykekoVersion to
+// surface the right number in the first-run welcome modal.
+//
+// THIS COMMENT IS A LANDMINE WARNING. v0.2.7 and v0.2.8 both shipped with
+// this section silently broken in the packaged app. Two earlier approaches
+// that LOOK correct but DON'T work in Electron 38.x:
+//   1) `require("./package.json").version` — Electron's preload `require()`
+//      is restricted to the "electron" module ONLY, even with sandbox:false
+//      set. Both `require("./package.json")` and `require("fs")` throw
+//      "module not found". Any throw inside preload kills every subsequent
+//      `contextBridge.exposeInMainWorld(...)` call — including
+//      __moorhenControl, on which the in-page UI's lifeline depends.
+//   2) `webPreferences.additionalArguments` from main.js + read from
+//      process.argv. Per Electron docs this should round-trip, but
+//      Chromium's switch-filter drops the arguments regardless of shape
+//      (--key=value, plain token, colon-prefixed). Doesn't reach the
+//      renderer's process.argv at all in Electron 38.x.
+// What works: synchronous IPC. main.js registers an `ipcMain.on(...)` for
+// "pykeko:get-version" at module load (before createWindow), and answers
+// via event.returnValue. Preload's sendSync returns it synchronously.
+let __pykekoVersion = "";
+try { __pykekoVersion = ipcRenderer.sendSync("pykeko:get-version") || ""; }
+catch (e) { console.warn("preload: pykeko:get-version sendSync failed:", e && e.message); }
+contextBridge.exposeInMainWorld("__pykekoVersion", __pykekoVersion);
 
 contextBridge.exposeInMainWorld("__moorhenControl", {
   onInvoke: (cb) => {

@@ -252,6 +252,9 @@ function createWindow() {
       // Disable sandbox - WASM pthread workers need to spawn child workers
       sandbox: false,
       // Preload sets window.MOORHEN_FORCE_32BIT early (avoids the 64-bit init hang)
+      // and pulls __pykekoVersion via ipcRenderer.sendSync("pykeko:get-version")
+      // (handler registered above — see comment there for why neither
+      // require("./package.json") nor additionalArguments worked).
       preload: path.join(__dirname, "preload.js"),
     },
   });
@@ -288,6 +291,19 @@ function invokeRenderer(win, verb, args) {
     win.webContents.send("moorhen-control:invoke", { id, verb, args });
   });
 }
+
+// Synchronous answer to preload's ipcRenderer.sendSync("pykeko:get-version").
+// Preload calls this very early to expose window.__pykekoVersion to the page.
+// Registered at module load (not inside startControlServer) so it's already
+// hooked when the renderer's preload runs — startControlServer is called
+// AFTER createWindow, which is too late for this particular sendSync.
+ipcMain.on("pykeko:get-version", (event) => {
+  try {
+    event.returnValue = require(path.join(__dirname, "package.json")).version || "";
+  } catch (e) {
+    event.returnValue = "";
+  }
+});
 
 function startControlServer(win) {
   ipcMain.on("moorhen-control:result", (_e, res) => {
