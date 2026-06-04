@@ -2,15 +2,30 @@
 // __PYKEKO_MVS_JSON_PLACEHOLDER__ inside index.html with an MVS JSON document at
 // export time. On load we parse it and hand it to Mol*'s loadMVS.
 //
-// Camera-follow density: MVS itself can't carry a clip param on
-// volume_representation (see molstar/molstar#1844). What it CAN do is leave
-// the volume reps in the state tree where we can reach them post-load.
-// Mol*'s underlying VolumeRepresentation3D has a `clip` param (a renderable
-// GPU uniform — updating it is essentially free, no re-mesh) inside its
-// `type.params`. After loadMVS we walk the state tree, find every volume
-// rep cell, and add a sphere clip that follows the camera target. Updating
-// the clip on camera change is one state-tree update per volume per frame,
-// throttled so we only fire when the user pauses.
+// Camera-follow density. As of Mol* 5.0 (we bumped to ^5.9.0 in PyKeko
+// 0.2.13), MVS *can* carry a static `clip` node on `volume_representation`
+// (`vol.representation({...}).clip({type:'sphere', center, radius, invert,
+// variant:'pixel'})`) — issue molstar/molstar#1844 — so the *initial* clip
+// could be expressed declaratively in the exported MVS. We don't currently
+// use that path because Mol* still has no declarative "follow camera
+// target" on clip nodes (the still-open half of #1844): the rolling-cube
+// UX requires re-anchoring on every camera move, which is necessarily
+// post-load. So we keep the imperative path below — walk the state tree,
+// find every VolumeRepresentation3D cell, seed a sphere clip at the camera
+// target, and re-patch `type.params.clip` on each throttled
+// camera.stateChanged. Updating clip is a GPU uniform — essentially free,
+// no re-mesh.
+//
+// Two layer-specific gotchas worth knowing while you read this file:
+//   - The raw `VolumeRepresentation3D.clip.objects[].scale` slot uses the
+//     sphere's SDF internally with a 0.5 multiplier, so `scale` is the
+//     diameter, not the radius. We pass `radius*2` (see makeClipSphere).
+//     The MVS-layer clip uses `radius` directly with no such gotcha — if
+//     we ever rebuild via the MVS builder, that workaround goes away.
+//   - `invert: true` is non-negotiable. Default Mol* clip discards pixels
+//     INSIDE the shape (cutaway); invert flips it so we KEEP pixels inside
+//     the sphere and discard everything outside. See mol-gl/shader/chunks/
+//     common-clip.glsl clipTest for the underlying logic.
 
 import { useEffect, useRef, useState } from 'react';
 import { throttleTime } from 'rxjs';
