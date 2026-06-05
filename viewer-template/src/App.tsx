@@ -2,26 +2,41 @@
 // __PYKEKO_MVS_JSON_PLACEHOLDER__ inside index.html with an MVS JSON document at
 // export time. On load we parse it and hand it to Mol*'s loadMVS.
 //
-// Camera-follow density. As of Mol* 5.0 (we bumped to ^5.9.0 in PyKeko
-// 0.2.13), MVS *can* carry a static `clip` node on `volume_representation`
-// (`vol.representation({...}).clip({type:'sphere', center, radius, invert,
-// variant:'pixel'})`) — issue molstar/molstar#1844 — so the *initial* clip
-// could be expressed declaratively in the exported MVS. We don't currently
-// use that path because Mol* still has no declarative "follow camera
-// target" on clip nodes (the still-open half of #1844): the rolling-cube
-// UX requires re-anchoring on every camera move, which is necessarily
-// post-load. So we keep the imperative path below — walk the state tree,
-// find every VolumeRepresentation3D cell, seed a sphere clip at the camera
-// target, and re-patch `type.params.clip` on each throttled
-// camera.stateChanged. Updating clip is a GPU uniform — essentially free,
-// no re-mesh.
+// Camera-follow density (the "rolling cube of density" UX from Coot 0.9.x):
+// this is the maintainer-endorsed approach, not a hack we'd rather replace.
+// We asked on molstar/molstar#1844 for a declarative way to make a `clip`
+// node track the camera target; dsehnal's reply
+// (https://github.com/molstar/molstar/issues/1844#issuecomment-4623898069):
+//   "If you want this, you will need to implement a custom extension to
+//   mol* core itself, this isn't possible with MVS itself. The way to do
+//   this is to throttle the camera position movement events (to say 30 or
+//   60 fps) and dynamically update the clip node directly in the mol* tree.
+//   For simple scenes the state.selectQ should get you the correct node
+//   quite easily and you just build the update."
+// — which is exactly what `wireCameraFollowDensity` does below. The
+// alternative he mentions is to write a Mol* core extension; logged but
+// out of scope for now.
 //
-// Two layer-specific gotchas worth knowing while you read this file:
+// Architecture as of PyKeko 0.2.16:
+//   1. The exported MVS file carries a DECLARATIVE static `clip` node on
+//      every `volume_representation` (MvsExportBuilder.ts emits it with the
+//      export-time camera target). On load, Mol* applies that clip directly
+//      — the volume already has the right clip BEFORE any of our JS runs.
+//      So opening the .html in any MVS-aware viewer (not just this one)
+//      gets a sensibly-clipped scene out of the box.
+//   2. `wireCameraFollowDensity` then subscribes to camera moves and
+//      patches `type.params.clip` on every throttled `camera.stateChanged`.
+//      The raw transformer path (not the MVS layer) is used here because
+//      that's where the GPU uniform actually lives; patches are essentially
+//      free (no re-mesh).
+//
+// Two layer-specific gotchas worth knowing:
 //   - The raw `VolumeRepresentation3D.clip.objects[].scale` slot uses the
 //     sphere's SDF internally with a 0.5 multiplier, so `scale` is the
 //     diameter, not the radius. We pass `radius*2` (see makeClipSphere).
-//     The MVS-layer clip uses `radius` directly with no such gotcha — if
-//     we ever rebuild via the MVS builder, that workaround goes away.
+//     The MVS-layer clip uses `radius` directly with no such gotcha —
+//     that's why the EXPORTER (MvsExportBuilder.ts) passes radius and the
+//     POST-LOAD UPDATE (here) passes diameter.
 //   - `invert: true` is non-negotiable. Default Mol* clip discards pixels
 //     INSIDE the shape (cutaway); invert flips it so we KEEP pixels inside
 //     the sphere and discard everything outside. See mol-gl/shader/chunks/
