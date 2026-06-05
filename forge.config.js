@@ -116,6 +116,25 @@ module.exports = {
       ...(IS_DIST ? [STATIC_DIR] : []),
       path.join(__dirname, "viewer-template", "dist"),
     ],
+    // Exclude paths that have NO business being inside the .app. Without this,
+    // electron-packager bundles the *entire* project working directory into
+    // Resources/app/, which means viewer-template/node_modules (~200 MB) ends
+    // up in every dmg — see commit b/c v0.2.18 first shipped a 489 MB dmg.
+    // Anything we ACTUALLY need at runtime is either (a) wrapper code
+    // (preload.js, main.js, package.json) which lives at the PyKeko root and
+    // is bundled by default, or (b) explicitly added via extraResource above.
+    // The viewer-template/dist single inlined HTML is added via extraResource
+    // so the source dir doesn't need to ship.
+    ignore: [
+      /^\/\.attic($|\/)/,                 // local backup dmgs
+      /^\/\.git($|\/)/,                   // git metadata
+      /^\/out($|\/)/,                     // previous build output (avoids recursive bundling)
+      /^\/viewer-template($|\/)/,         // viewer-template source + node_modules (the dist/ goes via extraResource)
+      /^\/static($|\/)/,                  // staged static dir (also goes via extraResource for dist)
+      /\.pykeko$/,                         // stray test session files
+      /\.cif$/,                            // stray test PDB downloads
+      /\.pdb$/,                            // stray test PDB downloads
+    ],
   },
   hooks: {
     // Bake the variant config so the packaged app self-describes its target tree/port.
