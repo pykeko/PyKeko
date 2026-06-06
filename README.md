@@ -71,6 +71,16 @@ xattr -rc out/PyKekoDev-darwin-arm64/PyKekoDev.app
 cp -r out/PyKekoDev-darwin-arm64/PyKekoDev.app /Applications/
 ```
 
+> The `xattr -rc` step above strips all extended attributes from the freshly
+> built `.app` before copying, so a locally-built install doesn't pick up a
+> quarantine flag. If you installed via the dmg (mount + drag in Finder) and
+> macOS still blocks the app on first launch, strip quarantine on the
+> installed copy instead:
+> ```bash
+> xattr -dr com.apple.quarantine /Applications/PyKeko.app
+> ```
+> See [`docs/install-mac.md`](https://github.com/pykeko/Moorhen-PyKeko/blob/main/docs/install-mac.md) for the full end-user install story.
+
 ## Run
 
 Launch from `/Applications/PyKeko.app` or `/Applications/PyKekoDev.app`, or for unpackaged runs:
