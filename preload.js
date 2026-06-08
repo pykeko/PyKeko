@@ -74,4 +74,10 @@ contextBridge.exposeInMainWorld("__moorhenControl", {
   // Renderer -> main: Open a .pykeko / .pb session file via native Open panel.
   // Returns { ok, path, bytes: Uint8Array } | { canceled } | { ok: false, error }.
   openSession: () => ipcRenderer.invoke("pykeko:open-session"),
+
+  // Local AceDRG SMILES→CIF fallback. The renderer's primary smiles_to_pdb
+  // path (RDKit-WASM) handles most cases; this is the escape hatch for
+  // exotic chemistries that RDKit can't process. Returns
+  // { ok, cif, tlc } on success, { ok: false, notInstalled?, error } otherwise.
+  acedrgSmiles: (smiles, tlc) => ipcRenderer.invoke("pykeko:acedrg-smiles", { smiles, tlc }),
 });

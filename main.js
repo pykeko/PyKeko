@@ -623,6 +623,110 @@ function startControlServer(win) {
     }
   });
 
+  // Local AceDRG SMILES→CIF fallback. The renderer's primary SMILES→CIF
+  // path is smiles_to_pdb (RDKit-WASM, fast, in-process). When that fails
+  // — exotic SMILES, AceDRG-only chemistries, geometry corner cases — we
+  // shell out to a local AceDRG install.
+  //
+  // Resolution order for the acedrg binary:
+  //   1. AceDRG_BIN env var (explicit override)
+  //   2. PATH lookup (acedrg)
+  //   3. Common CCP4 install layouts on macOS
+  //
+  // Returns { ok, cif, tlc } on success, { ok: false, error, ... } on failure.
+  // Doesn't fail destructively if acedrg isn't installed — the renderer
+  // surfaces the error so the user knows to install CCP4.
+  function findAcedrgBin() {
+    if (process.env.AceDRG_BIN && fs.existsSync(process.env.AceDRG_BIN)) {
+      return process.env.AceDRG_BIN;
+    }
+    const candidates = [
+      "/Applications/ccp4-9/bin/acedrg",
+      "/Applications/CCP4-9.app/Contents/CCP4/bin/acedrg",
+      "/Applications/ccp4-8.0/bin/acedrg",
+      "/opt/ccp4-9/bin/acedrg",
+      path.join(os.homedir(), "ccp4-9", "bin", "acedrg"),
+      path.join(os.homedir(), "ccp4-9.0", "bin", "acedrg"),
+    ];
+    for (const c of candidates) {
+      try { if (fs.existsSync(c)) return c; } catch (e) { /* skip */ }
+    }
+    // Last resort: PATH lookup via `which`. This honours the user's shell
+    // setup if they `source ccp4.setup-sh` in .zprofile.
+    try {
+      const { execFileSync } = require("child_process");
+      const which = execFileSync("which", ["acedrg"], { encoding: "utf8" }).trim();
+      if (which) return which;
+    } catch (e) { /* not on PATH */ }
+    return null;
+  }
+
+  ipcMain.handle("pykeko:acedrg-smiles", async (_evt, payload) => {
+    const { smiles, tlc } = payload || {};
+    if (!smiles || typeof smiles !== "string") {
+      return { ok: false, error: "missing SMILES" };
+    }
+    const cleanTlc = String(tlc || "LIG").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 8) || "LIG";
+
+    const acedrg = findAcedrgBin();
+    if (!acedrg) {
+      return {
+        ok: false,
+        notInstalled: true,
+        error: "acedrg not found. Install CCP4 (https://www.ccp4.ac.uk/) " +
+          "or set the AceDRG_BIN env var to the binary's full path.",
+      };
+    }
+
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "pykeko-acedrg-"));
+    try {
+      // Write an instructions file rather than passing -i directly: acedrg's
+      // -i flag wants a file containing SMILES + monomer-code lines, in that
+      // exact format. Cleaner than juggling shell quoting of the SMILES.
+      const instr = path.join(workDir, "instructions.txt");
+      fs.writeFileSync(instr,
+        "MON " + cleanTlc + "\n" +
+        "SMILES " + smiles + "\n",
+        "utf8");
+
+      const outPrefix = path.join(workDir, cleanTlc);
+      const args = ["-i", instr, "-o", outPrefix];
+      log("acedrg invoke: " + acedrg + " " + args.join(" "));
+
+      const { execFile } = require("child_process");
+      const stderr = await new Promise((resolve) => {
+        const child = execFile(acedrg, args, { cwd: workDir, timeout: 120 * 1000 }, (err, _stdout, stderr) => {
+          if (err) resolve(stderr || err.message || String(err));
+          else resolve(null);
+        });
+        // No stdin needed; child's instructions file drives it.
+        child.on("error", (err) => resolve(stderr || err.message || String(err)));
+      });
+
+      // AceDRG can EXIT with stderr noise but still produce a usable CIF; we
+      // trust the output file's existence as the success signal.
+      const cifPath = outPrefix + ".cif";
+      if (!fs.existsSync(cifPath)) {
+        return {
+          ok: false,
+          error: "acedrg did not produce a .cif (instructions: " + instr + ")",
+          stderr: stderr || "",
+        };
+      }
+      const cif = fs.readFileSync(cifPath, "utf8");
+      log("acedrg succeeded: " + cif.length + " bytes for tlc=" + cleanTlc);
+      return { ok: true, cif, tlc: cleanTlc, stderr: stderr || "" };
+    } catch (e) {
+      const msg = String((e && e.message) || e);
+      log("acedrg-smiles failed: " + msg);
+      return { ok: false, error: msg };
+    } finally {
+      // Best-effort cleanup. AceDRG can leave a lot of intermediate files
+      // (cif, pdb, mol, lig.scoreOfPosesH, etc.) in the work dir.
+      try { fs.rmSync(workDir, { recursive: true, force: true }); } catch (e) {}
+    }
+  });
+
   const server = http.createServer((req, res) => {
     if (req.method !== "POST") { res.writeHead(405); res.end(); return; }
     let body = "";
