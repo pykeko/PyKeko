@@ -73,8 +73,24 @@ import { defineConfig } from "vite";
 
 // Disable library-build config so vite builds a real SPA from index.html.
 const base = baseConfig as any;
+
+// Filter out vite-plugin-pwa. The service worker it injects caches the
+// previous bundle in IndexedDB and serves it on the first launch after an
+// upgrade — users see "missing" new features until they hard-refresh
+// (\`feedback_pykeko_sw_stale_cache\` in the auto-memory). PyKeko is a
+// packaged Electron app, not a website; there's no offline value to a SW
+// here. moorhen.org's browser users still get PWA because they use the
+// upstream config directly.
+const plugins = (Array.isArray(base.plugins) ? base.plugins : [])
+  .flat(Infinity)
+  .filter((p: any) => {
+    if (!p || typeof p.name !== "string") return true;
+    return !p.name.startsWith("vite-plugin-pwa");
+  });
+
 export default defineConfig({
   ...base,
+  plugins,
   build: {
     outDir: ${JSON.stringify(STATIC_DIR)},
     emptyOutDir: true,
