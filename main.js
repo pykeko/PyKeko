@@ -258,6 +258,23 @@ function createWindow() {
       preload: path.join(__dirname, "preload.js"),
     },
   });
+  // Cleanse any leftover vite-plugin-pwa service worker from PyKeko v0.2.22 and
+  // earlier (VitePWA was disabled in v0.2.24, but the SW registered by an older
+  // install persists across reinstalls on the localhost:51823 origin and serves
+  // the OLD bundle on first launch after every upgrade). The renderer-side
+  // cleanup in src/index.tsx that v0.2.24 added is stuck inside the new bundle
+  // — which the OLD SW intercepts and replaces with the cached old bundle, so
+  // the cleanup never runs. Doing it here, in the main process, BEFORE
+  // loadURL, runs through Electron's session API (not through the SW) and
+  // clears the SW state before any HTTP request the page makes.
+  try {
+    mainWindow.webContents.session.clearStorageData({ storages: ["serviceworkers"] })
+      .then(() => log("session.clearStorageData(serviceworkers) ok"))
+      .catch((e) => log("clearStorageData serviceworkers failed: " + (e && e.message)));
+  } catch (e) {
+    log("clearStorageData call threw: " + (e && e.message));
+  }
+
   mainWindow.loadURL(`http://localhost:${SERVE_PORT}/`);
   // 32-bit WASM is forced via window.MOORHEN_FORCE_32BIT, set early by preload.js.
   // (The old dom-ready WebAssembly.validate override never matched the probe — it checked
