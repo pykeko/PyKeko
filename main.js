@@ -815,7 +815,7 @@ Examples:
 
 const WANT_NEW = process.argv.includes("--new");
 const LAUNCH_CWD = process.env.MOORHEN_CWD || process.cwd();
-const LOADABLE_RE = /\.(pdb|ent|cif|mmcif|mtz|mrc|map|ccp4|gz)$/i;
+const LOADABLE_RE = /\.(pdb|ent|cif|mmcif|mtz|mrc|map|ccp4|gz|pb|pykeko)$/i;
 let initialFilesLoaded = false;
 const pendingOpenFiles = []; // macOS "Open With" files arriving before the bridge is ready
 let lastOpenDir = LAUNCH_CWD; // native open-dialog starts here, then follows the user
