@@ -103,9 +103,17 @@ If you need to "rebrand" further, change titles, READMEs, app names, package nam
 
 ## Pending follow-ups
 
-- [ ] Delete obsolete GitHub repos (the pre-rename originals — `gh repo list hilgersmt` and look for repos *not* in the table above; plus `strava-analytics`). Needs `gh auth refresh -h github.com -s delete_repo` first.
-- [ ] Pin the [install gist](https://gist.github.com/hilgersmt/797821d1fb70599b21fd31159b346a95) on the GitHub profile (web UI; the 4 current pins have 2 slots free)
-- [ ] Upload `PyKeko_avatar.png` as social-preview image for each of the 3 pykeko org repos (web UI per repo's Settings page — not API-accessible). Org avatar (`pykeko/settings/profile`) uses the same file.
+- [x] ~~Delete obsolete GitHub repos~~ — done as of 2026-06-08. `gh repo list hilgersmt` now returns just `cyclemeter` (personal app, keep). `strava-analytics` already deleted. No PyKeko-pre-rename leftovers remain.
+- [ ] Pin the [install gist](https://gist.github.com/hilgersmt/797821d1fb70599b21fd31159b346a95) on the GitHub profile. Web UI only:
+      1. Open https://github.com/hilgersmt (your profile)
+      2. "Customize your pins" button (next to the pin row)
+      3. Check the gist alongside the existing repo pins — 4 pins are used, 2 slots free
+      4. Save
+- [ ] Upload `PyKeko_avatar.png` as social-preview image for each of the 3 pykeko org repos. Web UI only (Settings → General → Social preview → "Edit" → upload). The file lives at `~/PyKeko/PyKeko_avatar.png` (923 KB). For each repo:
+      - https://github.com/pykeko/PyKeko/settings → General → Social preview
+      - https://github.com/pykeko/PyKekoMCP/settings → General → Social preview
+      - https://github.com/pykeko/Moorhen-PyKeko/settings → General → Social preview
+      Same file also fits the org avatar at https://github.com/organizations/pykeko/settings/profile (Profile picture → Upload).
 
 ## Where to look
 
