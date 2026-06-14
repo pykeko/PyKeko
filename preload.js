@@ -80,4 +80,10 @@ contextBridge.exposeInMainWorld("__moorhenControl", {
   // exotic chemistries that RDKit can't process. Returns
   // { ok, cif, tlc } on success, { ok: false, notInstalled?, error } otherwise.
   acedrgSmiles: (smiles, tlc) => ipcRenderer.invoke("pykeko:acedrg-smiles", { smiles, tlc }),
+
+  // Renderer -> main: write augmented mmCIF (covalent-link declaration output)
+  // directly to the launch CWD as <suggestedName>. No dialog. Used by
+  // declareCovalentLink so refmacat handoff lands next to the rest of the
+  // user's session files. Returns { ok, path } | { ok: false, error }.
+  saveAugmentedCif: (cifText, suggestedName) => ipcRenderer.invoke("pykeko:save-augmented-cif", { cifText, suggestedName }),
 });

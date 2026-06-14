@@ -543,6 +543,40 @@ function startControlServer(win) {
     }
   });
 
+  // Renderer -> main: write the augmented mmCIF from declareCovalentLink to
+  // the launch CWD. No dialog — the refmacat handoff just lands next to the
+  // user's other session files. Filename is sanitised; collisions overwrite.
+  //
+  // Fallback order for write location:
+  //   1. LAUNCH_CWD (set via MOORHEN_CWD env var when launched via the
+  //      `pykeko` CLI shim — refmacat session-style)
+  //   2. ~/Desktop (when launched from Finder — process.cwd() = "/" is
+  //      read-only and useless to the user anyway)
+  ipcMain.handle("pykeko:save-augmented-cif", async (_evt, payload) => {
+    try {
+      const { cifText, suggestedName } = payload || {};
+      if (!cifText) return { ok: false, error: "no cif text" };
+      const safe = String(suggestedName || "covalent_link.cif").replace(/[/\\]/g, "_");
+      const tryDirs = [LAUNCH_CWD, app.getPath("desktop")];
+      let lastErr = null;
+      for (const dir of tryDirs) {
+        try {
+          const outPath = path.join(dir, safe);
+          fs.writeFileSync(outPath, String(cifText), "utf8");
+          log("saved augmented cif: " + outPath + " (" + cifText.length.toLocaleString() + " bytes)");
+          return { ok: true, path: outPath };
+        } catch (e) {
+          lastErr = e;
+          log("save-augmented-cif (" + dir + ") failed: " + (e && e.message));
+        }
+      }
+      return { ok: false, error: String((lastErr && lastErr.message) || lastErr) };
+    } catch (e) {
+      log("save-augmented-cif failed: " + (e && e.message));
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  });
+
   // VS Code-style "Install Command-Line Launcher": write a tiny launcher to
   // /usr/local/bin (on the default PATH for every login shell via /etc/paths, so it
   // works regardless of shell) that execs THIS app's binary. /usr/local/bin is
