@@ -899,15 +899,14 @@ function startControlServer(win) {
     }
 
     const cycles = Math.max(1, Math.min(50, Number(nCycles) || 5));
-    // MAKE EXIT NO YES: continue past library-clash warnings (deposited
-    // ligands like DMS, EDO that already have CCP4 monomer dict entries).
-    // MAKE LINK YES: honor LINK records in the input PDB so user-supplied
-    // covalent bonds participate in the restraints.
-    const keywords =
-      "MAKE EXIT NO YES\n" +
-      "MAKE LINK YES\n" +
-      "NCYC " + cycles + "\n" +
-      "END\n";
+    // Minimal keywords. EMPIRICAL: `MAKE EXIT NO YES` terminates refmac at
+    // the makecif stage before any refinement cycles run (verified
+    // against 5P9I 2026-06-14) — the "warnings would otherwise stop us"
+    // intent is the wrong cure: refmac proceeds past name-clash warnings
+    // on its own with the default keyword set, and LINKR matching is
+    // automatic too. `MAKE LINK YES` is also unnecessary; refmac honors
+    // LINKR records in the input PDB without it.
+    const keywords = "NCYC " + cycles + "\nEND\n";
 
     log("refmac5 invoke: " + refmac + " " + args.join(" "));
     log("refmac5 keywords:\n" + keywords);
