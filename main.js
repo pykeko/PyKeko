@@ -688,16 +688,24 @@ function startControlServer(win) {
   // Doesn't fail destructively if acedrg isn't installed — the renderer
   // surfaces the error so the user knows to install CCP4.
   function findAcedrgBin() {
-    if (process.env.AceDRG_BIN && fs.existsSync(process.env.AceDRG_BIN)) {
-      return process.env.AceDRG_BIN;
+    return findCcp4Bin("acedrg", "AceDRG_BIN");
+  }
+
+  function findRefmac5Bin() {
+    return findCcp4Bin("refmac5", "REFMAC5_BIN");
+  }
+
+  function findCcp4Bin(binName, envVar) {
+    if (envVar && process.env[envVar] && fs.existsSync(process.env[envVar])) {
+      return process.env[envVar];
     }
     const candidates = [
-      "/Applications/ccp4-9/bin/acedrg",
-      "/Applications/CCP4-9.app/Contents/CCP4/bin/acedrg",
-      "/Applications/ccp4-8.0/bin/acedrg",
-      "/opt/ccp4-9/bin/acedrg",
-      path.join(os.homedir(), "ccp4-9", "bin", "acedrg"),
-      path.join(os.homedir(), "ccp4-9.0", "bin", "acedrg"),
+      `/Applications/ccp4-9/bin/${binName}`,
+      `/Applications/CCP4-9.app/Contents/CCP4/bin/${binName}`,
+      `/Applications/ccp4-8.0/bin/${binName}`,
+      `/opt/ccp4-9/bin/${binName}`,
+      path.join(os.homedir(), "ccp4-9", "bin", binName),
+      path.join(os.homedir(), "ccp4-9.0", "bin", binName),
     ];
     for (const c of candidates) {
       try { if (fs.existsSync(c)) return c; } catch (e) { /* skip */ }
@@ -706,7 +714,7 @@ function startControlServer(win) {
     // setup if they `source ccp4.setup-sh` in .zprofile.
     try {
       const { execFileSync } = require("child_process");
-      const which = execFileSync("which", ["acedrg"], { encoding: "utf8" }).trim();
+      const which = execFileSync("which", [binName], { encoding: "utf8" }).trim();
       if (which) return which;
     } catch (e) { /* not on PATH */ }
     return null;
@@ -776,6 +784,182 @@ function startControlServer(win) {
       // (cif, pdb, mol, lig.scoreOfPosesH, etc.) in the work dir.
       try { fs.rmSync(workDir, { recursive: true, force: true }); } catch (e) {}
     }
+  });
+
+  // Renderer -> main: open a native file picker scoped to MTZ files. Used
+  // by the covalent-link refmac5 spawn flow. Returns { ok, path } |
+  // { canceled } | { ok: false, error }.
+  ipcMain.handle("pykeko:pick-mtz-file", async () => {
+    try {
+      const win = BrowserWindow.getFocusedWindow() || mainWindow;
+      const r = await dialog.showOpenDialog(win, {
+        title: "Pick MTZ for REFMAC5",
+        defaultPath: lastSaveDir || app.getPath("desktop"),
+        filters: [{ name: "MTZ", extensions: ["mtz"] }],
+        properties: ["openFile"],
+      });
+      if (r.canceled || !r.filePaths.length) return { canceled: true };
+      const fp = r.filePaths[0];
+      lastSaveDir = path.dirname(fp);
+      return { ok: true, path: fp };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  });
+
+  // Renderer -> main: write an arbitrary text file to a path. Used by
+  // the covalent-link flow to save the substituted link CIF next to the
+  // augmented model CIF. dir falls back to ~/Desktop just like
+  // pykeko:save-augmented-cif.
+  ipcMain.handle("pykeko:save-text-file", async (_evt, payload) => {
+    try {
+      const { text, suggestedName, dir } = payload || {};
+      if (!text) return { ok: false, error: "no text" };
+      const safe = String(suggestedName || "untitled.txt").replace(/[/\\]/g, "_");
+      const tryDirs = [dir, LAUNCH_CWD, app.getPath("desktop")].filter(Boolean);
+      let lastErr = null;
+      for (const d of tryDirs) {
+        try {
+          const outPath = path.join(d, safe);
+          fs.writeFileSync(outPath, String(text), "utf8");
+          log("saved text file: " + outPath + " (" + text.length.toLocaleString() + " bytes)");
+          return { ok: true, path: outPath };
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+      return { ok: false, error: String((lastErr && lastErr.message) || lastErr) };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  });
+
+  // Renderer -> main: spawn refmac5 to refine a covalent-linked model.
+  //
+  // Inputs (payload):
+  //   modelCifPath  — XYZIN, augmented mmCIF with _struct_conn row
+  //   mtzPath       — HKLIN, observed structure factors
+  //   linkCifPath   — LIBIN, link dictionary (and/or ligand monomer)
+  //   nCycles       — NCYC keyword (default 5)
+  //   outDir        — where refined.pdb/refined.mtz/refmac.log are written
+  //                   (default: dirname of modelCifPath)
+  //
+  // Refmac5 keywords used:
+  //   MAKE HYDR NO        — don't add hydrogens (Coot side handles them)
+  //   MAKE CHECK 0        — skip exhaustive structure validation
+  //   MAKE NEWLIGAND EXIT NO — don't abort on a ligand not in the std library
+  //   NCYC                — refinement cycles
+  //
+  // Returns:
+  //   { ok: true, refinedPdb, refinedMtz, logPath, log }
+  //   { ok: false, notInstalled?, error, log? }
+  ipcMain.handle("pykeko:run-refmacat", async (_evt, payload) => {
+    const { modelCifPath, mtzPath, linkCifPath, nCycles, outDir } = payload || {};
+    if (!modelCifPath || !fs.existsSync(modelCifPath)) {
+      return { ok: false, error: "model cif path missing or does not exist: " + modelCifPath };
+    }
+    if (!mtzPath || !fs.existsSync(mtzPath)) {
+      return { ok: false, error: "mtz path missing or does not exist: " + mtzPath };
+    }
+
+    const refmac = findRefmac5Bin();
+    if (!refmac) {
+      return {
+        ok: false,
+        notInstalled: true,
+        error: "refmac5 not found. Install CCP4 (https://www.ccp4.ac.uk/) " +
+          "or set REFMAC5_BIN to the binary's full path.",
+      };
+    }
+
+    // refmac5 (and most CCP4 binaries) need $CCP4 / $CLIBD / etc. set —
+    // without them the binary aborts with "Cannot open environ.def" before
+    // doing anything. The user's interactive shell sources ccp4.setup-sh,
+    // but Electron's spawned child doesn't inherit that.
+    // Source the setup script in a wrapping shell and forward its env.
+    const setupSh = path.join(path.dirname(refmac), "ccp4.setup-sh");
+    const hasSetup = fs.existsSync(setupSh);
+
+    const baseDir = outDir && fs.existsSync(outDir) ? outDir : path.dirname(modelCifPath);
+    const baseName = path.basename(modelCifPath, path.extname(modelCifPath));
+    const refinedPdb = path.join(baseDir, baseName + "_refined.pdb");
+    const refinedMtz = path.join(baseDir, baseName + "_refined.mtz");
+    const logPath = path.join(baseDir, baseName + "_refmac.log");
+    const extraLibOut = path.join(baseDir, baseName + "_extra.cif");
+
+    const args = [
+      "XYZIN", modelCifPath,
+      "HKLIN", mtzPath,
+      "XYZOUT", refinedPdb,
+      "HKLOUT", refinedMtz,
+      "LIBOUT", extraLibOut,
+    ];
+    if (linkCifPath && fs.existsSync(linkCifPath)) {
+      args.unshift("LIBIN", linkCifPath);
+    }
+
+    const cycles = Math.max(1, Math.min(50, Number(nCycles) || 5));
+    // MAKE EXIT NO YES: continue past library-clash warnings (deposited
+    // ligands like DMS, EDO that already have CCP4 monomer dict entries).
+    // MAKE LINK YES: honor LINK records in the input PDB so user-supplied
+    // covalent bonds participate in the restraints.
+    const keywords =
+      "MAKE EXIT NO YES\n" +
+      "MAKE LINK YES\n" +
+      "NCYC " + cycles + "\n" +
+      "END\n";
+
+    log("refmac5 invoke: " + refmac + " " + args.join(" "));
+    log("refmac5 keywords:\n" + keywords);
+
+    const { spawn } = require("child_process");
+    const result = await new Promise((resolve) => {
+      let cmd, cmdArgs, cmdOpts;
+      if (hasSetup) {
+        // Wrap in a shell that sources ccp4.setup-sh first. Quoting the
+        // refmac args with single quotes is safe because none contain
+        // single quotes (they're absolute paths and CCP4 keywords).
+        const quoted = args.map((a) => "'" + String(a).replace(/'/g, "'\\''") + "'").join(" ");
+        cmd = "/bin/sh";
+        cmdArgs = ["-c", `. '${setupSh}' && exec '${refmac}' ${quoted}`];
+        cmdOpts = { cwd: baseDir };
+      } else {
+        cmd = refmac;
+        cmdArgs = args;
+        cmdOpts = { cwd: baseDir };
+      }
+      const child = spawn(cmd, cmdArgs, cmdOpts);
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (d) => { stdout += d; });
+      child.stderr.on("data", (d) => { stderr += d; });
+      child.on("error", (err) => resolve({ exit: -1, stdout, stderr: stderr + String(err) }));
+      child.on("exit", (code) => resolve({ exit: code, stdout, stderr }));
+      // Send keywords on stdin then close.
+      try { child.stdin.write(keywords); child.stdin.end(); } catch (e) { /* ignore */ }
+    });
+
+    try { fs.writeFileSync(logPath, "$ " + refmac + " " + args.join(" ") + "\n\n" + keywords + "\n--- stdout ---\n" + result.stdout + "\n--- stderr ---\n" + result.stderr, "utf8"); } catch (e) { /* ignore */ }
+
+    const refinedExists = fs.existsSync(refinedPdb);
+    if (result.exit !== 0 && !refinedExists) {
+      log("refmac5 failed: exit=" + result.exit);
+      return {
+        ok: false,
+        error: "refmac5 exited " + result.exit + (result.stderr ? ": " + result.stderr.split("\n").slice(-5).join(" ") : ""),
+        log: result.stdout + "\n" + result.stderr,
+        logPath,
+      };
+    }
+
+    log("refmac5 done: " + refinedPdb);
+    return {
+      ok: true,
+      refinedPdb,
+      refinedMtz: fs.existsSync(refinedMtz) ? refinedMtz : null,
+      logPath,
+      log: result.stdout.slice(-4000),
+    };
   });
 
   const server = http.createServer((req, res) => {

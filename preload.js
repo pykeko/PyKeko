@@ -86,4 +86,19 @@ contextBridge.exposeInMainWorld("__moorhenControl", {
   // declareCovalentLink so refmacat handoff lands next to the rest of the
   // user's session files. Returns { ok, path } | { ok: false, error }.
   saveAugmentedCif: (cifText, suggestedName) => ipcRenderer.invoke("pykeko:save-augmented-cif", { cifText, suggestedName }),
+
+  // Renderer -> main: write an arbitrary text file alongside the augmented
+  // CIF (link dictionary, extra restraints, etc). Same path-fallback as
+  // saveAugmentedCif. Returns { ok, path } | { ok: false, error }.
+  saveTextFile: (text, suggestedName, dir) => ipcRenderer.invoke("pykeko:save-text-file", { text, suggestedName, dir }),
+
+  // Renderer -> main: native MTZ file picker for the refmac5 spawn flow.
+  // Returns { ok, path } | { canceled } | { ok: false, error }.
+  pickMtzFile: () => ipcRenderer.invoke("pykeko:pick-mtz-file"),
+
+  // Renderer -> main: spawn refmac5 with the augmented model + user MTZ +
+  // link CIF. Synchronous (resolves when refmac exits). Returns
+  // { ok, refinedPdb, refinedMtz, logPath, log } | { ok: false, notInstalled?, error, log? }.
+  runRefmacat: (modelCifPath, mtzPath, linkCifPath, nCycles, outDir) =>
+    ipcRenderer.invoke("pykeko:run-refmacat", { modelCifPath, mtzPath, linkCifPath, nCycles, outDir }),
 });
