@@ -695,6 +695,8 @@ function startControlServer(win) {
     return findCcp4Bin("refmac5", "REFMAC5_BIN");
   }
 
+  const { mergeRefmacLinkCifs } = require("./lib/refmac-cif-merge");
+
   function findCcp4Bin(binName, envVar) {
     if (envVar && process.env[envVar] && fs.existsSync(process.env[envVar])) {
       return process.env[envVar];
@@ -894,8 +896,43 @@ function startControlServer(win) {
       "HKLOUT", refinedMtz,
       "LIBOUT", extraLibOut,
     ];
+
+    // LIBIN handling — multi-link aware.
+    // When the user has declared more than one covalent bond on the same
+    // model, each declare wrote a separate `<base>_link_<linkid>.cif` next
+    // to the model. refmac5's `LIBIN` keyword only honors a single file,
+    // so we scan the directory for all sibling link CIFs matching the
+    // model's basename and merge them into a single combined LIBIN.
+    //
+    // The model PDB contains LINKR records for every declared bond (the
+    // executor accumulates them), so refmac knows which links to apply.
+    // Without the merged LIBIN it would only have the chem_link template
+    // for the LAST declare and would silently fail to apply the others.
+    let libinFile = null;
     if (linkCifPath && fs.existsSync(linkCifPath)) {
-      args.unshift("LIBIN", linkCifPath);
+      try {
+        // model basename is the part before _covalent_ in the filename.
+        // e.g. /path/5P9I_covalent_CYS-ACR-pre-terminal.pdb → "5P9I"
+        const modelBaseName = path.basename(modelCifPath).replace(/_covalent_.*$/, "");
+        const dir = path.dirname(linkCifPath);
+        const siblings = fs.readdirSync(dir)
+          .filter(f => f.startsWith(modelBaseName + "_link_") && f.endsWith(".cif"))
+          .map(f => path.join(dir, f))
+          .filter(fp => fs.existsSync(fp));
+        if (siblings.length > 1) {
+          const cifTexts = siblings.map(fp => fs.readFileSync(fp, "utf8"));
+          const merged = mergeRefmacLinkCifs(cifTexts);
+          libinFile = path.join(baseDir, modelBaseName + "_links_merged.cif");
+          fs.writeFileSync(libinFile, merged, "utf8");
+          log("refmac5 LIBIN: merged " + siblings.length + " link CIFs → " + libinFile);
+        } else {
+          libinFile = linkCifPath;
+        }
+      } catch (e) {
+        log("refmac5 LIBIN merge failed (" + e.message + "), falling back to single");
+        libinFile = linkCifPath;
+      }
+      args.unshift("LIBIN", libinFile);
     }
 
     const cycles = Math.max(1, Math.min(50, Number(nCycles) || 5));
