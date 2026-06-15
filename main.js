@@ -727,7 +727,8 @@ function startControlServer(win) {
     if (!smiles || typeof smiles !== "string") {
       return { ok: false, error: "missing SMILES" };
     }
-    const cleanTlc = String(tlc || "LIG").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 8) || "LIG";
+    // PDB CCD codes are strictly 3 chars, uppercase, A-Z 0-9.
+    const cleanTlc = String(tlc || "LIG").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 3) || "LIG";
 
     const acedrg = findAcedrgBin();
     if (!acedrg) {
