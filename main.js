@@ -989,10 +989,22 @@ function startControlServer(win) {
       };
     }
 
+    // Also read the refined PDB content so the renderer can load it via
+    // `loadCoordsFromString` (Electron's CSP blocks `file://` URLs from
+    // the http://localhost:51823 origin the SPA is served from, so the
+    // older "loadCoordsFromURL('file://...')" approach silently failed).
+    let refinedPdbText = null;
+    try {
+      refinedPdbText = fs.readFileSync(refinedPdb, "utf8");
+    } catch (e) {
+      log("refmac5 done but refined-PDB read failed: " + (e && e.message));
+    }
+
     log("refmac5 done: " + refinedPdb);
     return {
       ok: true,
       refinedPdb,
+      refinedPdbText,
       refinedMtz: fs.existsSync(refinedMtz) ? refinedMtz : null,
       logPath,
       log: result.stdout.slice(-4000),
