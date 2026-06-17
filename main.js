@@ -627,8 +627,23 @@ function startControlServer(win) {
       const MAX_OUT = 256 * 1024;
       // Use the user's login shell so PATH / shell init files apply. zsh on
       // macOS by default; respect $SHELL if the user has set something else.
+      //
+      // -lc is *login non-interactive*, which sources /etc/zprofile +
+      // ~/.zshenv + ~/.zprofile + ~/.zlogin -- but NOT ~/.zshrc (interactive
+      // only). Since most users keep their PATH additions, conda init,
+      // CCP4 setup, and env vars in ~/.zshrc, we explicitly source it
+      // (and ~/.bashrc for bash users) before running the user's command.
+      // Misbehaving rc files that print to stdout will leak that into the
+      // REPL output; the standard `[[ $- == *i* ]]` interactive-guard
+      // pattern suppresses prompt/compinit noise automatically.
       const shell = process.env.SHELL || "/bin/zsh";
-      const args = ["-lc", cmd];
+      const shellName = path.basename(shell);
+      const rcSource = shellName === "zsh"
+        ? '[ -r "$HOME/.zshrc" ] && source "$HOME/.zshrc"; '
+        : shellName === "bash"
+        ? '[ -r "$HOME/.bashrc" ] && source "$HOME/.bashrc"; '
+        : "";
+      const args = ["-lc", rcSource + cmd];
       log(`run-shell: ${shell} -lc ${cmd.length > 200 ? cmd.slice(0, 200) + "…" : cmd} (cwd=${cwd})`);
       return await new Promise((resolve) => {
         let stdout = "";
@@ -707,6 +722,98 @@ function startControlServer(win) {
 
   ipcMain.handle("pykeko:get-cwd", async () => {
     return { ok: true, cwd: effectiveCwd, launchCwd: LAUNCH_CWD };
+  });
+
+  // v0.2.45 — `!export VAR=value` capture. The REPL routes a shell-style
+  // export here so the variable persists across subsequent `!` spawns AND
+  // into the refmac5/findligand/acedrg helpers (which inherit process.env).
+  // We run the export inside a captured subshell (with ~/.zshrc sourced so
+  // expansions like `export PATH=$PATH:/foo` resolve to the user's real
+  // PATH), capture the resulting value, then mutate process.env.
+  ipcMain.handle("pykeko:set-env", async (_evt, payload) => {
+    try {
+      const arg = String(payload?.arg || "").trim();
+      // Allow either `NAME=value` or just `NAME` (read existing value).
+      const m = /^([A-Za-z_][A-Za-z0-9_]*)(?:\s*=\s*(.*))?$/s.exec(arg);
+      if (!m) return { ok: false, error: "expected NAME or NAME=value" };
+      const name = m[1];
+      const hasValue = m[2] !== undefined;
+      if (!hasValue) {
+        return { ok: true, name, value: process.env[name] || "", read: true };
+      }
+      const { execFileSync } = require("child_process");
+      const shell = process.env.SHELL || "/bin/zsh";
+      const shellName = path.basename(shell);
+      const rcSource = shellName === "zsh"
+        ? '[ -r "$HOME/.zshrc" ] && source "$HOME/.zshrc"; '
+        : shellName === "bash"
+        ? '[ -r "$HOME/.bashrc" ] && source "$HOME/.bashrc"; '
+        : "";
+      // export-then-print: the shell handles $VAR / ${VAR} / quoting.
+      // printf without trailing newline so we get the literal value back.
+      const script = `${rcSource}export ${arg}; printf '%s' "$${name}"`;
+      let value = "";
+      try {
+        value = execFileSync(shell, ["-lc", script], {
+          env: process.env, cwd: effectiveCwd, encoding: "utf8", timeout: 5000,
+          maxBuffer: 1024 * 1024,
+        });
+      } catch (e) {
+        return { ok: false, error: "shell export failed: " + String((e && e.message) || e) };
+      }
+      process.env[name] = value;
+      const disp = value.length > 100 ? value.slice(0, 100) + "…" : value;
+      log(`env: ${name}=${disp}`);
+      return { ok: true, name, value };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  });
+
+  // v0.2.45 — directory stack for `!pushd` / `!popd` / `!dirs`. Same
+  // resolve-and-validate rules as setCwd. `cwdStack` itself lives at
+  // module scope above so it persists across IPC calls.
+  ipcMain.handle("pykeko:cwd-stack", async (_evt, payload) => {
+    try {
+      const action = String(payload?.action || "");
+      const resolveDir = (raw) => {
+        let p = String(raw || "").trim();
+        if (!p || p === "~") p = os.homedir();
+        else if (p.startsWith("~/")) p = path.join(os.homedir(), p.slice(2));
+        p = p.replace(/\$\{([A-Z_][A-Z0-9_]*)\}/gi, (_, n) => process.env[n] || "")
+             .replace(/\$([A-Z_][A-Z0-9_]*)/gi, (_, n) => process.env[n] || "");
+        if (!path.isAbsolute(p)) p = path.resolve(effectiveCwd, p);
+        const st = fs.statSync(p); // throws if missing
+        if (!st.isDirectory()) throw new Error("not a directory: " + p);
+        return p;
+      };
+      if (action === "push") {
+        let target;
+        try { target = resolveDir(payload?.path); }
+        catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+        cwdStack.unshift(effectiveCwd);
+        effectiveCwd = target;
+        lastOpenDir = target;
+        lastSaveDir = target;
+        log(`pushd → ${target} (stack depth ${cwdStack.length})`);
+        return { ok: true, cwd: target, stack: [target, ...cwdStack] };
+      }
+      if (action === "pop") {
+        if (cwdStack.length === 0) return { ok: false, error: "directory stack empty" };
+        const next = cwdStack.shift();
+        effectiveCwd = next;
+        lastOpenDir = next;
+        lastSaveDir = next;
+        log(`popd → ${next} (stack depth ${cwdStack.length})`);
+        return { ok: true, cwd: next, stack: [next, ...cwdStack] };
+      }
+      if (action === "list") {
+        return { ok: true, stack: [effectiveCwd, ...cwdStack] };
+      }
+      return { ok: false, error: "unknown action: " + action };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
   });
 
   ipcMain.handle("pykeko:save-augmented-cif", async (_evt, payload) => {
@@ -1436,6 +1543,10 @@ const pendingOpenFiles = []; // macOS "Open With" files arriving before the brid
 // `cd`. LAUNCH_CWD itself is preserved as a const so audit logs still tell
 // you where the user originally started.
 let effectiveCwd = (LAUNCH_CWD && LAUNCH_CWD !== "/") ? LAUNCH_CWD : os.homedir();
+// v0.2.45 — directory stack for !pushd / !popd / !dirs. Index 0 is the most
+// recently pushed dir; popd pops from the front. The "current" cwd is
+// effectiveCwd, not on the stack.
+const cwdStack = [];
 let lastOpenDir = effectiveCwd; // native open-dialog starts here, then follows the user
 // native save-dialog starts at the active cwd; nulled-out variant retained for
 // legacy code paths that gate on "no usable launch dir → no default".

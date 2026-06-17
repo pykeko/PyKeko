@@ -129,4 +129,16 @@ contextBridge.exposeInMainWorld("__moorhenControl", {
   // Returns { ok, cwd } | { ok:false, error }.
   setCwd: (path) => ipcRenderer.invoke("pykeko:set-cwd", { path }),
   getCwd: () => ipcRenderer.invoke("pykeko:get-cwd"),
+
+  // Renderer -> main: `!export NAME=value` capture. Runs the export
+  // through a shell with ~/.zshrc sourced so $VAR expansion works, then
+  // mutates process.env so subsequent !-shell spawns AND the
+  // refmac5/findligand/acedrg helpers see it. Pass just `NAME` (no `=`)
+  // to read an existing value. Returns { ok, name, value } | err.
+  setEnv: (arg) => ipcRenderer.invoke("pykeko:set-env", { arg }),
+
+  // Renderer -> main: directory stack for !pushd / !popd / !dirs.
+  // action: "push" (needs path) | "pop" | "list".
+  // Returns { ok, cwd?, stack: string[] } | err.
+  cwdStack: (action, path) => ipcRenderer.invoke("pykeko:cwd-stack", { action, path }),
 });
