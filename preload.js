@@ -101,4 +101,12 @@ contextBridge.exposeInMainWorld("__moorhenControl", {
   // { ok, refinedPdb, refinedMtz, logPath, log } | { ok: false, notInstalled?, error, log? }.
   runRefmacat: (modelCifPath, mtzPath, linkCifPath, nCycles, outDir) =>
     ipcRenderer.invoke("pykeko:run-refmacat", { modelCifPath, mtzPath, linkCifPath, nCycles, outDir }),
+
+  // Renderer -> main: spawn CCP4's findligand to fit a ligand into
+  // density blobs. v0.2.41's WASM fit_ligand_right_here returns empty
+  // (Coot 1.x wligand is broken in WASM); findligand is the working
+  // alternative. Returns { ok, fittedLigands:[{pdbText, clusterIdx,
+  // sampleIdx,path},...], workDir, logPath, log } | { ok:false,
+  // notInstalled?, error, log? }.
+  runFindLigand: (opts) => ipcRenderer.invoke("pykeko:run-findligand", opts),
 });

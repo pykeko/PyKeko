@@ -695,6 +695,10 @@ function startControlServer(win) {
     return findCcp4Bin("refmac5", "REFMAC5_BIN");
   }
 
+  function findFindligandBin() {
+    return findCcp4Bin("findligand", "FINDLIGAND_BIN");
+  }
+
   const { mergeRefmacLinkCifs } = require("./lib/refmac-cif-merge");
 
   function findCcp4Bin(binName, envVar) {
@@ -1008,6 +1012,171 @@ function startControlServer(win) {
       refinedMtz: fs.existsSync(refinedMtz) ? refinedMtz : null,
       logPath,
       log: result.stdout.slice(-4000),
+    };
+  });
+
+  // Renderer -> main: spawn CCP4's `findligand` (Coot 0.9 desktop's
+  // ligand-fit tool) to search a map for ligand-shaped density blobs.
+  //
+  // Why this exists: PyKeko v0.2.41 tried to wrap Coot 1.x's
+  // fit_ligand_right_here at the WASM layer. The function compiles
+  // and the clustering step runs (verified via Coot's verbose log:
+  // "There are 1 clusters" at the right position with score 138),
+  // but the final wligand fit step returns an empty vector. The
+  // wligand subsystem appears to be broken in the Coot 1.x WASM
+  // build — same shape as the embind silent-drop trap but at a
+  // different layer. findligand on Coot 0.9 desktop (shipped in
+  // CCP4) does the same job correctly out of the box.
+  //
+  // Inputs (payload):
+  //   proteinPdbText   — protein/model PDB (we write to disk)
+  //   mtzPath          — path to MTZ on disk (user picked via picker)
+  //   fCol, phiCol     — MTZ column labels (default DELFWT/PHDELWT
+  //                      for the Fo-Fc difference; pass FWT/PHWT for
+  //                      2Fo-Fc)
+  //   ligandPdbText    — ligand initial coordinates PDB (we write
+  //                      to disk; findligand uses these as the
+  //                      starting geometry for conformer generation)
+  //   ligandCifText    — chem_comp dictionary for the ligand
+  //   sigma            — search level (default 3.0)
+  //   clusters         — max clusters to consider (default 5)
+  //   samples          — flexible conformer samples (default 10)
+  //   flexible         — use flexible torsion search (default true)
+  //   absoluteLevel    — optional absolute density cutoff (e/A^3);
+  //                      overrides sigma when set
+  //
+  // Returns:
+  //   { ok: true, fittedLigands: [{ pdbText, path, clusterIdx, sampleIdx }, ...],
+  //     workDir, logPath, log }
+  //   { ok: false, notInstalled?, error, log? }
+  ipcMain.handle("pykeko:run-findligand", async (_evt, payload) => {
+    const {
+      proteinPdbText, mtzPath, fCol, phiCol,
+      ligandPdbText, ligandCifText,
+      sigma, clusters, samples, flexible, absoluteLevel,
+    } = payload || {};
+    if (!proteinPdbText) return { ok: false, error: "no protein PDB text" };
+    if (!mtzPath || !fs.existsSync(mtzPath)) {
+      return { ok: false, error: "MTZ path missing or does not exist: " + mtzPath };
+    }
+    if (!ligandPdbText) return { ok: false, error: "no ligand PDB text" };
+    if (!ligandCifText) return { ok: false, error: "no ligand CIF dict text" };
+
+    const findlig = findFindligandBin();
+    if (!findlig) {
+      return {
+        ok: false,
+        notInstalled: true,
+        error: "findligand not found. Install CCP4 (https://www.ccp4.ac.uk/) " +
+          "or set FINDLIGAND_BIN to the binary's full path.",
+      };
+    }
+
+    // findligand is a CCP4 binary; needs $CCP4 / $CLIBD set or it aborts.
+    // Same trick as refmac5 — wrap in a shell that sources ccp4.setup-sh.
+    const setupSh = path.join(path.dirname(findlig), "ccp4.setup-sh");
+    const hasSetup = fs.existsSync(setupSh);
+
+    // Working dir: temp dir under /tmp. Each invocation gets its own
+    // so concurrent runs don't trample each other's fitted-ligand-*.pdb
+    // outputs.
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "pykeko-findligand-"));
+    const proteinPath = path.join(workDir, "protein.pdb");
+    const ligandPath = path.join(workDir, "ligand.pdb");
+    const cifPath = path.join(workDir, "ligand.cif");
+    const logPath = path.join(workDir, "findligand.log");
+
+    try {
+      fs.writeFileSync(proteinPath, String(proteinPdbText), "utf8");
+      fs.writeFileSync(ligandPath, String(ligandPdbText), "utf8");
+      fs.writeFileSync(cifPath, String(ligandCifText), "utf8");
+    } catch (e) {
+      return { ok: false, error: "Could not write findligand inputs: " + (e && e.message) };
+    }
+
+    const args = [
+      "--pdbin", proteinPath,
+      "--hklin", mtzPath,
+      "--f", String(fCol || "DELFWT"),
+      "--phi", String(phiCol || "PHDELWT"),
+      "--dictionary", cifPath,
+      "--clusters", String(Math.max(1, Math.min(30, Math.round(clusters || 5)))),
+    ];
+    if (absoluteLevel !== undefined && absoluteLevel !== null) {
+      args.push("--absolute", String(absoluteLevel));
+    } else {
+      args.push("--sigma", String(sigma || 3.0));
+    }
+    if (flexible !== false) args.push("--flexible");
+    args.push("--samples", String(Math.max(1, Math.min(100, Math.round(samples || 10)))));
+    args.push(ligandPath);
+
+    log("findligand invoke: " + findlig + " " + args.join(" "));
+
+    const { spawn } = require("child_process");
+    const runResult = await new Promise((resolve) => {
+      let cmd, cmdArgs;
+      if (hasSetup) {
+        const quoted = args.map((a) => "'" + String(a).replace(/'/g, "'\\''") + "'").join(" ");
+        cmd = "/bin/sh";
+        cmdArgs = ["-c", `. '${setupSh}' && exec '${findlig}' ${quoted}`];
+      } else {
+        cmd = findlig;
+        cmdArgs = args;
+      }
+      const child = spawn(cmd, cmdArgs, { cwd: workDir });
+      let stdout = "", stderr = "";
+      child.stdout.on("data", (d) => { stdout += d; });
+      child.stderr.on("data", (d) => { stderr += d; });
+      child.on("error", (err) => resolve({ exit: -1, stdout, stderr: stderr + String(err) }));
+      child.on("exit", (code) => resolve({ exit: code, stdout, stderr }));
+    });
+
+    try {
+      fs.writeFileSync(logPath,
+        "$ " + findlig + " " + args.join(" ") + "\n\n" +
+        "--- stdout ---\n" + runResult.stdout + "\n" +
+        "--- stderr ---\n" + runResult.stderr, "utf8");
+    } catch (e) { /* non-fatal */ }
+
+    // Collect fitted ligand outputs. findligand writes
+    // fitted-ligand-<cluster>-<sample>.pdb files into the working dir.
+    const fittedLigands = [];
+    try {
+      for (const f of fs.readdirSync(workDir).sort()) {
+        const m = f.match(/^fitted-ligand-(\d+)-(\d+)\.pdb$/);
+        if (!m) continue;
+        const fullPath = path.join(workDir, f);
+        const pdbText = fs.readFileSync(fullPath, "utf8");
+        fittedLigands.push({
+          pdbText,
+          path: fullPath,
+          clusterIdx: parseInt(m[1], 10),
+          sampleIdx: parseInt(m[2], 10),
+        });
+      }
+    } catch (e) {
+      log("findligand output read failed: " + (e && e.message));
+    }
+
+    if (runResult.exit !== 0 && fittedLigands.length === 0) {
+      log("findligand failed: exit=" + runResult.exit);
+      return {
+        ok: false,
+        error: "findligand exited " + runResult.exit +
+          (runResult.stderr ? ": " + runResult.stderr.split("\n").slice(-5).join(" ") : ""),
+        workDir, logPath,
+        log: runResult.stdout + "\n" + runResult.stderr,
+      };
+    }
+
+    log("findligand done: " + fittedLigands.length + " fits in " + workDir);
+    return {
+      ok: true,
+      fittedLigands,
+      workDir,
+      logPath,
+      log: runResult.stdout.slice(-4000),
     };
   });
 
