@@ -1,6 +1,6 @@
 {
   "name": "pykeko-wrapper",
-  "version": "0.2.42",
+  "version": "0.2.43",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
