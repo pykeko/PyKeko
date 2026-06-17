@@ -604,12 +604,117 @@ function startControlServer(win) {
     }
   });
 
+  // PyKeko v0.2.45 — in-app log console "shell mode".
+  //
+  // The REPL in MoorhenLogConsole routes inputs that begin with `!` to
+  // this handler. The rest of the input is run via the user's login
+  // shell (`zsh -lc <cmd>`) inside LAUNCH_CWD (or $HOME if the launch
+  // dir is the read-only "/") so $PATH and CCP4-setup-sh-style env
+  // come along for free. Useful for `!ls`, `!grep`, `!gemmi info`,
+  // `!ccp4 ...`, `!python -c ...`, etc. without leaving PyKeko.
+  //
+  // Security: this is a single-user desktop app where the user types
+  // the command. Same risk shape as opening Terminal yourself. The
+  // dedicated spawn handlers above (refmacat/findligand/acedrg) call
+  // fixed binaries with shaped args; this is the general escape hatch.
+  // Caps: 30 s timeout, 256 kB stdout+stderr each.
+  ipcMain.handle("pykeko:run-shell", async (_evt, payload) => {
+    try {
+      const cmd = String(payload?.cmd || "").trim();
+      if (!cmd) return { ok: false, error: "empty command" };
+      const timeoutMs = Math.min(120000, Math.max(1000, Number(payload?.timeoutMs) || 30000));
+      const cwd = payload?.cwd || effectiveCwd;
+      const MAX_OUT = 256 * 1024;
+      // Use the user's login shell so PATH / shell init files apply. zsh on
+      // macOS by default; respect $SHELL if the user has set something else.
+      const shell = process.env.SHELL || "/bin/zsh";
+      const args = ["-lc", cmd];
+      log(`run-shell: ${shell} -lc ${cmd.length > 200 ? cmd.slice(0, 200) + "…" : cmd} (cwd=${cwd})`);
+      return await new Promise((resolve) => {
+        let stdout = "";
+        let stderr = "";
+        let killed = false;
+        let timer = null;
+        let child;
+        try {
+          child = spawn(shell, args, { cwd, env: process.env });
+        } catch (e) {
+          return resolve({ ok: false, error: "spawn failed: " + String((e && e.message) || e) });
+        }
+        timer = setTimeout(() => { killed = true; try { child.kill("SIGTERM"); } catch (e) {} }, timeoutMs);
+        child.stdout.on("data", (d) => {
+          if (stdout.length < MAX_OUT) stdout += d.toString("utf8").slice(0, MAX_OUT - stdout.length);
+        });
+        child.stderr.on("data", (d) => {
+          if (stderr.length < MAX_OUT) stderr += d.toString("utf8").slice(0, MAX_OUT - stderr.length);
+        });
+        child.on("error", (e) => {
+          clearTimeout(timer);
+          resolve({ ok: false, error: String((e && e.message) || e), stdout, stderr });
+        });
+        child.on("close", (code, signal) => {
+          clearTimeout(timer);
+          resolve({
+            ok: !killed && code === 0,
+            code: code ?? null,
+            signal: signal ?? null,
+            killed,
+            timedOut: killed,
+            stdout,
+            stderr,
+            cwd,
+            cmd,
+          });
+        });
+      });
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  });
+
+  // v0.2.45 — change the active working directory. `!cd <path>` in the
+  // in-app REPL routes here. Accepts ~, $VAR, and relative paths
+  // (resolved against the current effectiveCwd). Validates the target is
+  // a directory before mutating. After this, all save-fallback chains
+  // and run-shell defaults use the new dir.
+  ipcMain.handle("pykeko:set-cwd", async (_evt, payload) => {
+    try {
+      let p = String(payload?.path || "").trim();
+      if (!p) p = os.homedir();
+      // Expand leading ~ (~ alone or ~/...). NB: we don't expand ~user form.
+      if (p === "~") p = os.homedir();
+      else if (p.startsWith("~/")) p = path.join(os.homedir(), p.slice(2));
+      // Expand $VAR / ${VAR}.
+      p = p.replace(/\$\{([A-Z_][A-Z0-9_]*)\}/gi, (_, n) => process.env[n] || "")
+           .replace(/\$([A-Z_][A-Z0-9_]*)/gi, (_, n) => process.env[n] || "");
+      // Resolve against the current effective cwd if relative.
+      if (!path.isAbsolute(p)) p = path.resolve(effectiveCwd, p);
+      // Validate.
+      let st;
+      try { st = fs.statSync(p); } catch (e) {
+        return { ok: false, error: `not found: ${p}` };
+      }
+      if (!st.isDirectory()) return { ok: false, error: `not a directory: ${p}` };
+      effectiveCwd = p;
+      lastOpenDir = p;
+      lastSaveDir = p;
+      log(`cwd → ${p}`);
+      return { ok: true, cwd: p, launchCwd: LAUNCH_CWD };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  });
+
+  ipcMain.handle("pykeko:get-cwd", async () => {
+    return { ok: true, cwd: effectiveCwd, launchCwd: LAUNCH_CWD };
+  });
+
   ipcMain.handle("pykeko:save-augmented-cif", async (_evt, payload) => {
     try {
       const { cifText, suggestedName } = payload || {};
       if (!cifText) return { ok: false, error: "no cif text" };
       const safe = String(suggestedName || "covalent_link.cif").replace(/[/\\]/g, "_");
-      const tryDirs = [LAUNCH_CWD, app.getPath("desktop")];
+      const tryDirs = [effectiveCwd, app.getPath("desktop")];
       let lastErr = null;
       for (const dir of tryDirs) {
         try {
@@ -875,7 +980,7 @@ function startControlServer(win) {
       const { text, suggestedName, dir } = payload || {};
       if (!text) return { ok: false, error: "no text" };
       const safe = String(suggestedName || "untitled.txt").replace(/[/\\]/g, "_");
-      const tryDirs = [dir, LAUNCH_CWD, app.getPath("desktop")].filter(Boolean);
+      const tryDirs = [dir, effectiveCwd, app.getPath("desktop")].filter(Boolean);
       let lastErr = null;
       for (const d of tryDirs) {
         try {
@@ -1323,10 +1428,18 @@ const LAUNCH_CWD = process.env.MOORHEN_CWD || process.cwd();
 const LOADABLE_RE = /\.(pdb|ent|cif|mmcif|mtz|mrc|map|ccp4|gz|pb|pykeko)$/i;
 let initialFilesLoaded = false;
 const pendingOpenFiles = []; // macOS "Open With" files arriving before the bridge is ready
-let lastOpenDir = LAUNCH_CWD; // native open-dialog starts here, then follows the user
-// native save-dialog starts at the launch dir when that's usable (CLI launch from
-// a project folder), else falls back to the Desktop (a GUI launch has cwd "/"). Then follows the user.
-let lastSaveDir = (LAUNCH_CWD && LAUNCH_CWD !== "/") ? LAUNCH_CWD : null;
+// v0.2.45 — `effectiveCwd` is the *active* working directory the user is
+// currently sitting in, mutated by `!cd <path>` in the in-app console.
+// Starts at LAUNCH_CWD and falls back to $HOME if that's "/" (GUI launches
+// have a useless cwd). Everywhere main.js used to fall back to LAUNCH_CWD
+// for save destinations now reads `effectiveCwd` so saves track the user's
+// `cd`. LAUNCH_CWD itself is preserved as a const so audit logs still tell
+// you where the user originally started.
+let effectiveCwd = (LAUNCH_CWD && LAUNCH_CWD !== "/") ? LAUNCH_CWD : os.homedir();
+let lastOpenDir = effectiveCwd; // native open-dialog starts here, then follows the user
+// native save-dialog starts at the active cwd; nulled-out variant retained for
+// legacy code paths that gate on "no usable launch dir → no default".
+let lastSaveDir = effectiveCwd;
 
 function parseFileArgs(argv, cwd) {
   const out = [];

@@ -114,4 +114,19 @@ contextBridge.exposeInMainWorld("__moorhenControl", {
   // { ok, text, position } | { ok:false, error }.
   logTailInitial: () => ipcRenderer.invoke("pykeko:log-tail-initial"),
   logTailSince: (position) => ipcRenderer.invoke("pykeko:log-tail-since", { position }),
+
+  // Renderer -> main: run a shell command in the user's login shell.
+  // Used by the in-app console's `!` prefix and the runShell control
+  // verb. Returns { ok, code, signal, stdout, stderr, cmd, cwd, killed,
+  // timedOut } | { ok: false, error }.
+  runShell: (cmd, opts) => ipcRenderer.invoke("pykeko:run-shell", { cmd, ...(opts || {}) }),
+
+  // Renderer -> main: change / read the active working directory. After
+  // setCwd, all save-fallback chains in main.js write into the new dir
+  // (save-augmented-cif, save-text-file) and run-shell defaults to it.
+  // Native save dialogs default to it too, until the user picks
+  // elsewhere (which then becomes the dialog's last-used location).
+  // Returns { ok, cwd } | { ok:false, error }.
+  setCwd: (path) => ipcRenderer.invoke("pykeko:set-cwd", { path }),
+  getCwd: () => ipcRenderer.invoke("pykeko:get-cwd"),
 });
