@@ -552,6 +552,58 @@ function startControlServer(win) {
   //      `pykeko` CLI shim — refmacat session-style)
   //   2. ~/Desktop (when launched from Finder — process.cwd() = "/" is
   //      read-only and useless to the user anyway)
+  // Renderer -> main: stream the tail of /tmp/pykeko.log into an in-app
+  // console panel. The log file already collects BOTH the renderer's
+  // console.{log,warn,error} (Electron forwards them via the
+  // console-message hook in createWindow) AND the main process's own
+  // `log(...)` calls (refmac/findligand/acedrg spawn output etc.) — so
+  // surfacing it in the UI gives the user a "what's PyKeko doing right
+  // now" view without having to open Terminal and tail it.
+  //
+  // Two reads:
+  //   - `log-tail-initial`: pulls the last ~16kb so the panel opens
+  //     with recent context. Returns { ok, text, position }.
+  //   - `log-tail-since`: pulls only bytes added since the given
+  //     position. The renderer polls this every ~1s. Returns
+  //     { ok, text, position }.
+  //
+  // Both clamp to a sensible max length so a runaway log doesn't
+  // shovel megabytes through IPC.
+  ipcMain.handle("pykeko:log-tail-initial", async () => {
+    try {
+      if (!fs.existsSync(LOG_PATH)) return { ok: true, text: "", position: 0 };
+      const stat = fs.statSync(LOG_PATH);
+      const INITIAL_BYTES = 16 * 1024;
+      const start = Math.max(0, stat.size - INITIAL_BYTES);
+      const fd = fs.openSync(LOG_PATH, "r");
+      const buf = Buffer.alloc(stat.size - start);
+      fs.readSync(fd, buf, 0, buf.length, start);
+      fs.closeSync(fd);
+      return { ok: true, text: buf.toString("utf8"), position: stat.size };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  });
+
+  ipcMain.handle("pykeko:log-tail-since", async (_evt, payload) => {
+    try {
+      const position = Math.max(0, Number(payload?.position || 0));
+      if (!fs.existsSync(LOG_PATH)) return { ok: true, text: "", position: 0 };
+      const stat = fs.statSync(LOG_PATH);
+      if (stat.size <= position) return { ok: true, text: "", position };
+      const MAX_CHUNK = 256 * 1024; // cap per-poll payload
+      const want = stat.size - position;
+      const start = want > MAX_CHUNK ? stat.size - MAX_CHUNK : position;
+      const fd = fs.openSync(LOG_PATH, "r");
+      const buf = Buffer.alloc(stat.size - start);
+      fs.readSync(fd, buf, 0, buf.length, start);
+      fs.closeSync(fd);
+      return { ok: true, text: buf.toString("utf8"), position: stat.size };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  });
+
   ipcMain.handle("pykeko:save-augmented-cif", async (_evt, payload) => {
     try {
       const { cifText, suggestedName } = payload || {};

@@ -109,4 +109,9 @@ contextBridge.exposeInMainWorld("__moorhenControl", {
   // sampleIdx,path},...], workDir, logPath, log } | { ok:false,
   // notInstalled?, error, log? }.
   runFindLigand: (opts) => ipcRenderer.invoke("pykeko:run-findligand", opts),
+
+  // Renderer -> main: in-app log console. Both calls return
+  // { ok, text, position } | { ok:false, error }.
+  logTailInitial: () => ipcRenderer.invoke("pykeko:log-tail-initial"),
+  logTailSince: (position) => ipcRenderer.invoke("pykeko:log-tail-since", { position }),
 });
