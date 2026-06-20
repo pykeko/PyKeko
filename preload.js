@@ -110,6 +110,14 @@ contextBridge.exposeInMainWorld("__moorhenControl", {
   // notInstalled?, error, log? }.
   runFindLigand: (opts) => ipcRenderer.invoke("pykeko:run-findligand", opts),
 
+  // Renderer -> main: spawn CCP4's `dimple` auto-pipeline. Inputs are
+  // file paths (model PDB, MTZ, optional ligand CIF) + optional SMILES,
+  // refmac cycle count, and MR threshold. Streams progress to the in-app
+  // console while running (dimple takes minutes). Returns
+  // { ok, finalPdb, finalPdbText, finalMtz, outDir, logPath, log } |
+  // { ok:false, notInstalled?, error }.
+  runDimple: (opts) => ipcRenderer.invoke("pykeko:run-dimple", opts),
+
   // Renderer -> main: in-app log console. Both calls return
   // { ok, text, position } | { ok:false, error }.
   logTailInitial: () => ipcRenderer.invoke("pykeko:log-tail-initial"),

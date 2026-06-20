@@ -963,6 +963,10 @@ function startControlServer(win) {
     return findCcp4Bin("findligand", "FINDLIGAND_BIN");
   }
 
+  function findDimpleBin() {
+    return findCcp4Bin("dimple", "DIMPLE_BIN");
+  }
+
   const { mergeRefmacLinkCifs } = require("./lib/refmac-cif-merge");
 
   function findCcp4Bin(binName, envVar) {
@@ -1276,6 +1280,150 @@ function startControlServer(win) {
       refinedMtz: fs.existsSync(refinedMtz) ? refinedMtz : null,
       logPath,
       log: result.stdout.slice(-4000),
+    };
+  });
+
+  // Renderer -> main: spawn CCP4's `dimple` — the auto-pipeline that
+  // runs molecular-replacement-or-rigid-body + restrained refinement +
+  // optional ligand fitting end-to-end. Inputs: an apo model + MTZ +
+  // optionally a ligand CIF (-l) or SMILES (-f). Outputs land in an
+  // output directory: `final.pdb` (refined model with ligand placed
+  // if one was given) + `final.mtz` (refined map coefficients) +
+  // `dimple.log`.
+  //
+  // Dimple runs for minutes (typical), not seconds, so unlike refmac5
+  // we stream stdout/stderr to the log file in real time and tee a
+  // tail to MOORHEN_LOG_PATH so the in-app console shows live progress.
+  ipcMain.handle("pykeko:run-dimple", async (_evt, payload) => {
+    const { modelPath, mtzPath, ligandCifPath, smiles, outDir, restrCycles, mrThreshold, freeRFlagsMtz } = payload || {};
+    if (!modelPath || !fs.existsSync(modelPath)) {
+      return { ok: false, error: "model path missing or does not exist: " + modelPath };
+    }
+    if (!mtzPath || !fs.existsSync(mtzPath)) {
+      return { ok: false, error: "mtz path missing or does not exist: " + mtzPath };
+    }
+    if (ligandCifPath && !fs.existsSync(ligandCifPath)) {
+      return { ok: false, error: "ligand CIF path missing or does not exist: " + ligandCifPath };
+    }
+
+    const dimple = findDimpleBin();
+    if (!dimple) {
+      return {
+        ok: false, notInstalled: true,
+        error: "dimple not found. Install CCP4 (https://www.ccp4.ac.uk/) " +
+          "or set DIMPLE_BIN to the binary's full path.",
+      };
+    }
+
+    // Same wrapping shell as refmac5: dimple's underlying calls (refmac,
+    // findligand, mtzdump, …) all need the CCP4 env.
+    const setupSh = path.join(path.dirname(dimple), "ccp4.setup-sh");
+    const hasSetup = fs.existsSync(setupSh);
+
+    // Pick a fresh output dir if the caller didn't supply one.
+    const baseDir = outDir && outDir.trim()
+      ? outDir
+      : path.join(path.dirname(mtzPath), "dimple_" + path.basename(modelPath, path.extname(modelPath)));
+    try {
+      if (!fs.existsSync(baseDir)) fs.mkdirSync(baseDir, { recursive: true });
+    } catch (e) {
+      return { ok: false, error: "could not create output dir " + baseDir + ": " + (e && e.message) };
+    }
+
+    const args = [];
+    if (restrCycles) args.push("--restr-cycles", String(Math.max(0, Math.min(20, Number(restrCycles)))));
+    if (mrThreshold !== undefined && mrThreshold !== null && mrThreshold !== "") {
+      args.push("--MR-when-r", String(mrThreshold));
+    }
+    if (freeRFlagsMtz && fs.existsSync(freeRFlagsMtz)) {
+      args.push("--free-r-flags", freeRFlagsMtz);
+    }
+    if (ligandCifPath) {
+      args.push("-l", ligandCifPath);
+    } else if (smiles && smiles.trim()) {
+      args.push("-f", smiles.trim());
+    }
+    // Positional: input.pdb input.mtz output-dir
+    args.push(modelPath, mtzPath, baseDir);
+
+    const logPath = path.join(baseDir, "pykeko_dimple.log");
+    log("dimple invoke: " + dimple + " " + args.join(" "));
+
+    const { spawn } = require("child_process");
+    const result = await new Promise((resolve) => {
+      let cmd, cmdArgs, cmdOpts;
+      if (hasSetup) {
+        const quoted = args.map((a) => "'" + String(a).replace(/'/g, "'\\''") + "'").join(" ");
+        cmd = "/bin/sh";
+        cmdArgs = ["-c", `. '${setupSh}' && exec '${dimple}' ${quoted}`];
+        cmdOpts = { cwd: baseDir };
+      } else {
+        cmd = dimple;
+        cmdArgs = args;
+        cmdOpts = { cwd: baseDir };
+      }
+      // Stream output to pykeko_dimple.log so the in-app console can
+      // surface progress while it runs (dimple takes minutes). Also keep
+      // last 4 kB in memory so we can return a tail to the renderer.
+      let logFd;
+      try { logFd = fs.openSync(logPath, "w"); } catch (e) { logFd = null; }
+      let tailBuf = "";
+      const onChunk = (d) => {
+        const s = d.toString("utf8");
+        if (logFd != null) { try { fs.writeSync(logFd, s); } catch (e) {} }
+        tailBuf += s;
+        if (tailBuf.length > 8192) tailBuf = tailBuf.slice(-8192);
+        // Stream key lines to MOORHEN_LOG_PATH so the in-app console
+        // shows them too. Filter to non-empty, non-progress-only lines.
+        const lines = s.split("\n").filter(l => l.trim().length > 0);
+        for (const ln of lines) {
+          if (/error|warning|stage|run/i.test(ln) || ln.startsWith(">>>")) {
+            log("dimple: " + ln.slice(0, 200));
+          }
+        }
+      };
+      const child = spawn(cmd, cmdArgs, cmdOpts);
+      child.stdout.on("data", onChunk);
+      child.stderr.on("data", onChunk);
+      child.on("error", (err) => {
+        if (logFd != null) { try { fs.closeSync(logFd); } catch (e) {} }
+        resolve({ exit: -1, tail: tailBuf + "\n" + String(err) });
+      });
+      child.on("exit", (code) => {
+        if (logFd != null) { try { fs.closeSync(logFd); } catch (e) {} }
+        resolve({ exit: code, tail: tailBuf });
+      });
+    });
+
+    // Standard dimple output names:
+    const finalPdb = path.join(baseDir, "final.pdb");
+    const finalMtz = path.join(baseDir, "final.mtz");
+    const finalExists = fs.existsSync(finalPdb);
+
+    if (result.exit !== 0 && !finalExists) {
+      log("dimple failed: exit=" + result.exit);
+      return {
+        ok: false,
+        error: "dimple exited " + result.exit + (result.tail ? ": " + result.tail.split("\n").slice(-5).join(" ") : ""),
+        log: result.tail,
+        logPath,
+        outDir: baseDir,
+      };
+    }
+
+    let finalPdbText = null;
+    try { finalPdbText = fs.readFileSync(finalPdb, "utf8"); }
+    catch (e) { log("dimple done but final.pdb read failed: " + (e && e.message)); }
+
+    log("dimple done: " + finalPdb);
+    return {
+      ok: true,
+      finalPdb,
+      finalPdbText,
+      finalMtz: fs.existsSync(finalMtz) ? finalMtz : null,
+      outDir: baseDir,
+      logPath,
+      log: result.tail,
     };
   });
 
