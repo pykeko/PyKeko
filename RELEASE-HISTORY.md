@@ -58,6 +58,8 @@ run [`tools/release-sizes.sh`](tools/release-sizes.sh) and paste its output here
 
 > **v0.2.8** was tagged briefly during the session save/restore work but never properly released — the preload regression from v0.2.7 was still present and the session-save menu items fell through to the legacy browser path. v0.2.9 is the first build where that feature actually works. See [`feedback_electron_preload_require_trap.md`](https://github.com/hilgersmt/notes-or-wherever) for the diagnosis (or this repo's `CLAUDE.md`).
 
+> **Postscript on the v0.2.34 / v0.2.35 / v0.2.42 "in-app covalent RSR" framing.** The row bodies above describe `make_link_restraints_from_res_vec` as "stubbed" and imply we're waiting on upstream Coot to "re-enable that path" so in-app RSR can honour declared covalent bonds. Paul Emsley clarified on [pemsley/coot#374](https://github.com/pemsley/coot/issues/374) (2026-06-28): _"make_link_restraints_from_res_vec() is old code and not used. make_restraints_ng() and make_link_restraints_ng() are the modern methods. struct_conn is not yet handled AFAIR."_ So: (a) the function we were poking is dead code that won't be re-enabled; (b) the modern restraint path doesn't read `_struct_conn` yet — that's the real unimplemented gap; (c) our JS-side mmCIF surgery + REFMAC5 handoff isn't working around a Coot _bug_, it's working around an upstream _feature gap_, and it remains the correct approach today. The clean upstream fix is a PR to `make_link_restraints_ng()` that consumes `_struct_conn`; non-trivial C++ work in Coot, considered but deferred.
+
 ## Growth read
 
 - **Net −32.51 MB / −18% over 23 days** total (v0.1 = 176.48 MB on 2026-05-25 → v0.2.45 = 143.97 MB on 2026-06-17)
