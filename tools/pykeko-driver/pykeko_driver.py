@@ -137,17 +137,23 @@ class PyKekoSession:
         return self._page
 
     def js(self, source: str, await_promise: bool = True) -> Any:
-        """Run arbitrary JS in the renderer via MoorhenControlApi.evalJs.
+        """Run arbitrary JS in the renderer and return its result.
 
-        Returns the `json` field of the evalJs response (the parsed value),
-        or raises if evalJs returned ok=false.
+        Bypasses MoorhenControlApi.evalJs (which is for the REPL's
+        expression-first semantics and would double-wrap an async
+        arrow function into a returned-function-object). Uses
+        Playwright's `page.evaluate` directly — accepts either an
+        arrow function `() => ...` / `async () => ...` or a plain
+        expression / statement block.
         """
-        payload = self.page.evaluate(
-            f"async () => await window.MoorhenControlApi.evalJs({json.dumps(source)})"
-        )
-        if not isinstance(payload, dict) or not payload.get("ok"):
-            raise RuntimeError(f"evalJs failed: {payload!r}")
-        return payload.get("json")
+        # Playwright's evaluate expects a JS function expression as the
+        # first arg. If the source already begins with `(` or `async` /
+        # `function`, pass verbatim. Otherwise wrap it.
+        stripped = source.strip()
+        if stripped.startswith(("(", "async", "function")):
+            return self.page.evaluate(source)
+        # Wrap as an async arrow so await inside works.
+        return self.page.evaluate(f"async () => {{ {source} }}")
 
     def pymol(self, script: str) -> dict:
         """Run PyMOL script via the in-app translator. Returns {ok, error?}."""
@@ -232,6 +238,33 @@ class PyKekoSession:
     def wait_ms(self, ms: int) -> None:
         """Deliberate delay. Prefer wait_for()/wait_for_function() when possible."""
         self.page.wait_for_timeout(ms)
+
+    def hover_canvas(self) -> None:
+        """Move the mouse to the centre of the 3D canvas.
+
+        Necessary before dispatching keyboard shortcuts: Moorhen only
+        installs `document.onkeydown` on the canvas mouseenter event
+        (see mgWebGL.tsx:1311). Without the hover, keyboard shortcuts
+        like Cmd+Z / n / p / etc. are silently dropped.
+        """
+        box = self.page.evaluate(
+            "() => { const c = document.querySelector('canvas'); if (!c) return null; "
+            "const r = c.getBoundingClientRect(); "
+            "return { x: r.left + r.width/2, y: r.top + r.height/2 }; }"
+        )
+        if not box:
+            raise RuntimeError("no canvas found on page")
+        self.page.mouse.move(box["x"], box["y"])
+        self.page.wait_for_timeout(200)  # give React time to run the mouseenter handler
+
+    def press(self, keys: str) -> None:
+        """Press a keyboard shortcut against the 3D canvas.
+
+        Hovers the canvas first (see hover_canvas). Accepts Playwright's
+        key syntax: 'Meta+Z', 'Control+Shift+Z', 'n', 'ArrowUp', etc.
+        """
+        self.hover_canvas()
+        self.page.keyboard.press(keys)
 
     def wait_for(self, js_condition: str, timeout_ms: int = 10_000) -> None:
         """Block until a JS predicate returns truthy in the renderer.
