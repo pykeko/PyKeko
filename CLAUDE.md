@@ -49,10 +49,10 @@ These flow between PyKeko (wrapper), PyKekoMCP, and the in-page bridge inside Mo
 
 If you need to "rebrand" further, change titles, READMEs, app names, package names — never the above.
 
-## Current state (as of pk-v0.3.3, 2026-07-10)
+## Current state (as of pk-v0.3.4, 2026-07-11)
 
-- Version: `0.3.3` in `package.json`, `CFBundleShortVersionString` derived from it
-- Release: pk-v0.3.3 on Moorhen-PyKeko (canonical, asset: `PyKeko.dmg`, **144 MB**). The wrapper repo carries a matching `pk-v0.3.3` tag and a mirror release with the same dmg. The org page's download badge and install link point at the Moorhen-PyKeko release (historical convention since v0.1). When shipping a new version: build the dmg in `~/PyKeko` via `npm run make`, create a release on **Moorhen-PyKeko first** with the dmg + `--latest`, then mirror to PyKeko. Update `RELEASE-HISTORY.md` (use `tools/release-sizes.sh` for the new row).
+- Version: `0.3.4` in `package.json`, `CFBundleShortVersionString` derived from it
+- Release: pk-v0.3.4 on Moorhen-PyKeko (canonical, asset: `PyKeko.dmg`, **144 MB**). The wrapper repo carries a matching `pk-v0.3.4` tag and a mirror release with the same dmg. The org page's download badge and install link point at the Moorhen-PyKeko release (historical convention since v0.1). When shipping a new version: build the dmg in `~/PyKeko` via `npm run make`, create a release on **Moorhen-PyKeko first** with the dmg + `--latest`, then mirror to PyKeko. Update `RELEASE-HISTORY.md` (use `tools/release-sizes.sh` for the new row).
 - **v0.2.19 was closed without code** — upstream Moorhen's `Validation → Water validation…` already implements Coot's `find_water_baddies` UI (B-factor / sigma / min-dist / max-dist thresholds + View/Refine/Delete buttons). Nothing to ship.
 - **v0.2.23, v0.2.44 were never dmg-released** — v0.2.23 was tagged but the smoke-test caught the .map-of-undefined bug before publish (rolled into v0.2.24); v0.2.44 was committed but folded directly into v0.2.45 along with the REPL.
 - Per-version detail for **v0.2.20 through v0.3.0** lives in [`RELEASE-HISTORY.md`](RELEASE-HISTORY.md) (reverse-chrono table) and the GitHub Releases page; below this point CLAUDE.md retains the detailed v0.2.18 → v0.2 notes that predate that table.
