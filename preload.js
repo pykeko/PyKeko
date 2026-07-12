@@ -75,6 +75,20 @@ contextBridge.exposeInMainWorld("__moorhenControl", {
   // Returns { ok, path, bytes: Uint8Array } | { canceled } | { ok: false, error }.
   openSession: () => ipcRenderer.invoke("pykeko:open-session"),
 
+  // PyKeko autosave (v0.3.7).
+  //  - autosave(bytes, suggestedName): dialog-free write into
+  //    ~/Documents/PyKeko-autosave/<suggestedName>-<ISO-timestamp>.pykeko.
+  //    Retention: last 20 files (older purged on next write).
+  //    Returns { ok, path } | { ok: false, error }.
+  //  - autosaveList(): { ok, entries: [{name, path, size, mtimeMs}, ...] }
+  //    sorted newest-first. Used on startup to decide whether to surface
+  //    a "recovery available" toast.
+  //  - autosaveLoad(path): { ok, path, bytes } for a specific autosave file.
+  //    Path must be inside the autosave dir (enforced main-side).
+  autosave: (bytes, suggestedName) => ipcRenderer.invoke("pykeko:autosave", { bytes, suggestedName }),
+  autosaveList: () => ipcRenderer.invoke("pykeko:autosave-list"),
+  autosaveLoad: (filePath) => ipcRenderer.invoke("pykeko:autosave-load", filePath),
+
   // Local AceDRG SMILES→CIF fallback. The renderer's primary smiles_to_pdb
   // path (RDKit-WASM) handles most cases; this is the escape hatch for
   // exotic chemistries that RDKit can't process. Returns

@@ -518,6 +518,92 @@ function startControlServer(win) {
     }
   });
 
+  // PyKeko autosave (v0.3.7) — write session bytes to ~/Documents/PyKeko-autosave/
+  // WITHOUT a dialog. Renderer scheduler drives this every ~5 min when state is
+  // dirty and at least one molecule is loaded. Keeps last 20 files; older ones
+  // are purged on the next write.
+  //
+  // Filename shape: <sanitised-mol-name>-<ISO-timestamp>.pykeko
+  //   e.g. "5L0E-2026-07-12T19_47_23.pykeko"
+  // We use `_` for `:` in the timestamp so macOS Finder can display it.
+  //
+  // Returns { ok, path } on success, { ok: false, error } on failure.
+  const AUTOSAVE_DIR = path.join(os.homedir(), "Documents", "PyKeko-autosave");
+  const AUTOSAVE_KEEP = 20;
+
+  function ensureAutosaveDir() {
+    if (!fs.existsSync(AUTOSAVE_DIR)) {
+      fs.mkdirSync(AUTOSAVE_DIR, { recursive: true });
+    }
+  }
+
+  function pruneAutosaves() {
+    try {
+      const entries = fs.readdirSync(AUTOSAVE_DIR)
+        .filter(n => n.endsWith(".pykeko"))
+        .map(n => ({ n, p: path.join(AUTOSAVE_DIR, n), m: fs.statSync(path.join(AUTOSAVE_DIR, n)).mtimeMs }))
+        .sort((a, b) => b.m - a.m);
+      for (let i = AUTOSAVE_KEEP; i < entries.length; i++) {
+        try { fs.unlinkSync(entries[i].p); } catch (e) { /* ignore */ }
+      }
+    } catch (e) { /* dir may not exist yet */ }
+  }
+
+  ipcMain.handle("pykeko:autosave", async (_evt, payload) => {
+    try {
+      const { bytes, suggestedName } = payload || {};
+      if (!bytes) return { ok: false, error: "no session bytes" };
+      ensureAutosaveDir();
+      // Sanitise suggested name; strip path separators + any awkward chars.
+      // Timestamp uses ISO with `:` swapped for `_` (Finder-safe).
+      const stamp = new Date().toISOString().replace(/:/g, "_").replace(/\..+$/, "");
+      const base = String(suggestedName || "session")
+        .replace(/[/\\]/g, "_")
+        .replace(/\.pykeko$/i, "");
+      const filename = `${base}-${stamp}.pykeko`;
+      const fullPath = path.join(AUTOSAVE_DIR, filename);
+      fs.writeFileSync(fullPath, Buffer.from(bytes));
+      pruneAutosaves();
+      log("autosave: wrote " + fullPath + " (" + Buffer.from(bytes).length.toLocaleString() + " bytes)");
+      return { ok: true, path: fullPath };
+    } catch (e) {
+      log("autosave failed: " + (e && e.message));
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  });
+
+  // Enumerate existing autosaves — used on startup to decide whether to show
+  // the "recovery available" toast. Returns newest first.
+  ipcMain.handle("pykeko:autosave-list", async () => {
+    try {
+      if (!fs.existsSync(AUTOSAVE_DIR)) return { ok: true, entries: [] };
+      const entries = fs.readdirSync(AUTOSAVE_DIR)
+        .filter(n => n.endsWith(".pykeko"))
+        .map(n => {
+          const p = path.join(AUTOSAVE_DIR, n);
+          const st = fs.statSync(p);
+          return { name: n, path: p, size: st.size, mtimeMs: st.mtimeMs };
+        })
+        .sort((a, b) => b.mtimeMs - a.mtimeMs);
+      return { ok: true, entries };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  });
+
+  // Load an autosave file's bytes back to the renderer for protobuf-decode.
+  // Same shape as pykeko:open-session's result so the renderer path can reuse.
+  ipcMain.handle("pykeko:autosave-load", async (_evt, filePath) => {
+    try {
+      if (typeof filePath !== "string" || !filePath) return { ok: false, error: "missing path" };
+      if (!filePath.startsWith(AUTOSAVE_DIR)) return { ok: false, error: "path outside autosave dir" };
+      const buf = fs.readFileSync(filePath);
+      return { ok: true, path: filePath, bytes: buf };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  });
+
   // Open a `.pykeko` / `.pb` session via native Open panel. Returns bytes
   // back to the renderer for protobuf-decode + state hydration there.
   ipcMain.handle("pykeko:open-session", async () => {
